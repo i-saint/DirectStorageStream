@@ -1,0 +1,7 @@
+.vs/
+.vscode/
+packages/
+bin/
+obj/
+x64/
+*.bin
