@@ -1,4 +1,5 @@
 ﻿#include "dstorage_stream.h"
+#include "internal.h"
 
 #include <atomic>
 #include <chrono>
@@ -6,25 +7,12 @@
 #include <dxgi1_4.h>
 #include <winrt/base.h>
 
+
 namespace ist {
 
 #pragma region Misc
 using winrt::check_hresult;
 using winrt::com_ptr;
-
-struct handle_closer
-{
-    void operator()(HANDLE h) noexcept
-    {
-        assert(h != INVALID_HANDLE_VALUE);
-        if (h)
-        {
-            ::CloseHandle(h);
-        }
-    }
-};
-using ScopedHandle = std::unique_ptr<void, handle_closer>;
-
 
 // functions
 // d3d12.dll や dstorage.dll がないと exe が起動すらしなくなってしまうのは避けたいため、
@@ -38,11 +26,11 @@ struct DSResolveImports
     {
         if (HMODULE d3d12 = LoadLibraryA("d3d12.dll"))
         {
-            g_D3D12CreateDevice = (decltype(&D3D12CreateDevice))::GetProcAddress(d3d12, "D3D12CreateDevice");
+            (void*&)g_D3D12CreateDevice = ::GetProcAddress(d3d12, "D3D12CreateDevice");
         }
         if (HMODULE dstorage = LoadLibraryA("dstorage.dll"))
         {
-            g_DStorageGetFactory = (decltype(&DStorageGetFactory))::GetProcAddress(dstorage, "DStorageGetFactory");
+            (void*&)g_DStorageGetFactory = ::GetProcAddress(dstorage, "DStorageGetFactory");
         }
     }
 };
@@ -83,12 +71,11 @@ uint32_t DStorageStream::get_staging_buffer_size()
 
 static std::wstring ToWString(std::string_view str)
 {
-    size_t wclen = MultiByteToWideChar(CP_UTF8, MB_PRECOMPOSED, str.data(), (int)str.size(), nullptr, 0);
+    size_t wclen = ::MultiByteToWideChar(CP_UTF8, MB_PRECOMPOSED, str.data(), (int)str.size(), nullptr, 0);
 
     std::wstring wpath;
-    wpath.resize(wclen + 1, 'a');
-    MultiByteToWideChar(CP_UTF8, MB_PRECOMPOSED, str.data(), (int)str.size(), wpath.data(), (int)wpath.size());
-    wpath.pop_back();
+    wpath.resize(wclen);
+    ::MultiByteToWideChar(CP_UTF8, MB_PRECOMPOSED, str.data(), (int)str.size(), wpath.data(), (int)wpath.size());
     return wpath;
 }
 
@@ -314,69 +301,88 @@ int DStorageStreamBuf::underflow()
 
 long DStorageStreamBuf::begin_read()
 {
+    DS_PROFILE_SCOPE("DStorageStreamBuf::begin_read()");
+
     auto& m = *pimpl_;
-    HRESULT hr = g_ds_factory->OpenFile(m.path_.c_str(), IID_PPV_ARGS(m.file_.put()));
-    if (FAILED(hr))
+    HRESULT hr;
+    uint64_t file_size;
+
     {
-        m.state_ = status_code::error_file_open_failed;
-        return E_FAIL;
-    }
+        DS_PROFILE_SCOPE("DStorageStreamBuf::begin_read() OpenFile");
 
-    BY_HANDLE_FILE_INFORMATION info{};
-    if (FAILED(m.file_->GetFileInformation(&info)))
+        hr = g_ds_factory->OpenFile(m.path_.c_str(), IID_PPV_ARGS(m.file_.put()));
+        if (FAILED(hr)) {
+            m.state_ = status_code::error_file_open_failed;
+            return hr;
+        }
+    }
     {
-        m.state_ = status_code::error_file_open_failed;
-        return E_FAIL;
+        DS_PROFILE_SCOPE("DStorageStreamBuf::begin_read() GetFileInformation");
+
+        BY_HANDLE_FILE_INFORMATION info{};
+        hr = m.file_->GetFileInformation(&info);
+        if (FAILED(hr)) {
+            m.state_ = status_code::error_file_open_failed;
+            return hr;
+        }
+        file_size = (uint64_t)info.nFileSizeHigh << 32 | (uint64_t)info.nFileSizeLow;
     }
-    uint64_t file_size = (uint64_t)info.nFileSizeHigh << 32 | (uint64_t)info.nFileSizeLow;
 
-    // allocate buffer
-    auto& buf = pimpl_->buf_;
-    DirtyResize(buf, file_size);
-    m.state_ = status_code::reading;
-
-    g_d3d12_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(m.fence_.put()));
-
-    uint64_t remain = file_size;
-    uint64_t progress = 0;
-    while (remain > 0)
     {
-        uint32_t readSize = (uint32_t)std::min<uint64_t>(g_ds_staging_buffer_size, remain);
-        DSTORAGE_REQUEST request = {};
-        request.Options.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
-        request.Options.DestinationType = DSTORAGE_REQUEST_DESTINATION_MEMORY;
-        request.Source.File.Source = m.file_.get();
-        request.Source.File.Offset = progress;
-        request.Source.File.Size = readSize;
-        request.UncompressedSize = readSize;
-        request.Destination.Memory.Buffer = buf.data() + progress;
-        request.Destination.Memory.Size = readSize;
-        g_ds_queue->EnqueueRequest(&request);
+        DS_PROFILE_SCOPE("DStorageStreamBuf::begin_read() Submit");
 
-        remain -= readSize;
-        progress += readSize;
-        g_ds_queue->EnqueueSignal(m.fence_.get(), progress);
+        // allocate buffer
+        auto& buf = pimpl_->buf_;
+        DirtyResize(buf, file_size);
+        m.state_ = status_code::reading;
+
+        g_d3d12_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(m.fence_.put()));
+
+        uint64_t remain = file_size;
+        uint64_t progress = 0;
+        while (remain > 0)
+        {
+            uint32_t readSize = (uint32_t)std::min<uint64_t>(g_ds_staging_buffer_size, remain);
+            DSTORAGE_REQUEST request = {};
+            request.Options.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
+            request.Options.DestinationType = DSTORAGE_REQUEST_DESTINATION_MEMORY;
+            request.Source.File.Source = m.file_.get();
+            request.Source.File.Offset = progress;
+            request.Source.File.Size = readSize;
+            request.UncompressedSize = readSize;
+            request.Destination.Memory.Buffer = buf.data() + progress;
+            request.Destination.Memory.Size = readSize;
+            g_ds_queue->EnqueueRequest(&request);
+
+            remain -= readSize;
+            progress += readSize;
+            g_ds_queue->EnqueueSignal(m.fence_.get(), progress);
+        }
+
+        // fire event on complete
+        m.fence_event_ = ScopedHandle(::CreateEvent(nullptr, FALSE, FALSE, nullptr));
+        m.fence_->SetEventOnCompletion(progress, m.fence_event_.get());
+
+        // submit
+        g_ds_queue->Submit();
     }
 
-    // fire event on complete
-    m.fence_event_ = ScopedHandle(::CreateEvent(nullptr, FALSE, FALSE, nullptr));
-    m.fence_->SetEventOnCompletion(progress, m.fence_event_.get());
+    {
+        DS_PROFILE_SCOPE("DStorageStreamBuf::begin_read() Wait");
 
-    // submit
-    g_ds_queue->Submit();
+        // wait
+        ::WaitForSingleObject(m.fence_event_.get(), INFINITE);
 
-    // wait
-    ::WaitForSingleObject(m.fence_event_.get(), INFINITE);
-
-    DSTORAGE_ERROR_RECORD errorRecord{};
-    g_ds_queue->RetrieveErrorRecord(&errorRecord);
-    if (SUCCEEDED(errorRecord.FirstFailure.HResult)) {
-        m.state_ = status_code::completed;
-        return S_OK;
-    }
-    else {
-        m.state_ = status_code::error_unknown;
-        return errorRecord.FirstFailure.HResult;
+        DSTORAGE_ERROR_RECORD errorRecord{};
+        g_ds_queue->RetrieveErrorRecord(&errorRecord);
+        if (SUCCEEDED(errorRecord.FirstFailure.HResult)) {
+            m.state_ = status_code::completed;
+            return S_OK;
+        }
+        else {
+            m.state_ = status_code::error_unknown;
+            return errorRecord.FirstFailure.HResult;
+        }
     }
 }
 
@@ -392,6 +398,8 @@ bool DStorageStreamBuf::is_complete() const noexcept
 
 bool DStorageStreamBuf::wait()
 {
+    DS_PROFILE_SCOPE("DStorageStreamBuf::wait()");
+
     auto& m = *pimpl_;
     if (m.future_.valid()) {
         m.future_.wait();
@@ -403,6 +411,8 @@ bool DStorageStreamBuf::wait()
 
 bool DStorageStreamBuf::wait_next_block()
 {
+    DS_PROFILE_SCOPE("DStorageStreamBuf::wait_next_block()");
+
     bool r = false;
 
     auto& m = *pimpl_;
@@ -458,6 +468,8 @@ bool DStorageStreamBuf::open(std::wstring&& path)
 {
     close();
 
+    DS_PROFILE_SCOPE("DStorageStreamBuf::open()");
+
     auto& m = *pimpl_;
     if (!g_ds_factory)
     {
@@ -473,6 +485,8 @@ bool DStorageStreamBuf::open(std::wstring&& path)
 
 void DStorageStreamBuf::close()
 {
+    DS_PROFILE_SCOPE("DStorageStreamBuf::close()");
+
     if (pimpl_->future_.valid()) {
         pimpl_->future_.wait();
     }

@@ -1,25 +1,11 @@
 ﻿#include "mmap_stream.h"
+#include "internal.h"
+
 #include <functional>
 #include <cassert>
 #include <windows.h>
 
 namespace ist {
-
-#pragma region Misc
-
-struct handle_closer
-{
-    void operator()(HANDLE h) noexcept {
-        assert(h != INVALID_HANDLE_VALUE);
-        if (h) {
-            ::CloseHandle(h);
-        }
-    }
-};
-using ScopedHandle = std::unique_ptr<void, handle_closer>;
-
-#pragma endregion Misc
-
 
 #pragma region MemoryMappedFile
 
@@ -113,6 +99,8 @@ bool MemoryMappedFile::open(const char* _path, std::ios::openmode mode)
 {
     close();
 
+    DS_PROFILE_SCOPE("MemoryMappedFile::open()");
+
     auto& m = *pimpl_;
     m.mode_ = mode;
     if (mode & std::ios::out) {
@@ -148,14 +136,11 @@ bool MemoryMappedFile::open(const char* _path, std::ios::openmode mode)
                 ::GetFileSizeEx(m.file_.get(), &size);
                 m.size_ = size.QuadPart;
                 m.data_ = ::MapViewOfFile(m.mapping_.get(), FILE_MAP_READ, 0, 0, 0);
-                if (m.data_)
+                if (m.data_) {
                     return true;
+                }
             }
         }
-    }
-    else
-    {
-        return false;
     }
 
     close();
@@ -176,6 +161,7 @@ void* MemoryMappedFile::map(size_t capacity)
         return nullptr;
     unmap();
 
+    DS_PROFILE_SCOPE("MemoryMappedFile::map()");
     auto& m = *pimpl_;
 
     LARGE_INTEGER size;
@@ -190,6 +176,8 @@ void* MemoryMappedFile::map(size_t capacity)
 
 void MemoryMappedFile::unmap()
 {
+    DS_PROFILE_SCOPE("MemoryMappedFile::unmap()");
+
     auto& m = *pimpl_;
     if (m.data_) {
         ::UnmapViewOfFile(m.data_);
