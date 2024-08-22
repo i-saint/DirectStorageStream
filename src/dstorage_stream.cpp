@@ -32,33 +32,26 @@ struct DirectStorageInitializer
 {
     DirectStorageInitializer()
     {
-        if (HMODULE d3d12 = LoadLibraryA("d3d12.dll"))
-        {
+        if (HMODULE d3d12 = LoadLibraryA("d3d12.dll")) {
             (void*&)g_D3D12CreateDevice = ::GetProcAddress(d3d12, "D3D12CreateDevice");
         }
-        if (HMODULE dstorage = LoadLibraryA("dstorage.dll"))
-        {
+        if (HMODULE dstorage = LoadLibraryA("dstorage.dll")) {
             (void*&)g_DStorageGetFactory = ::GetProcAddress(dstorage, "DStorageGetFactory");
         }
 
-        if (!g_ds_factory)
-        {
-            if (!g_d3d12_device)
-            {
-                if (!g_D3D12CreateDevice || !g_DStorageGetFactory)
-                {
+        if (!g_ds_factory) {
+            if (!g_d3d12_device) {
+                if (!g_D3D12CreateDevice || !g_DStorageGetFactory) {
                     return;
                 }
                 g_D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&g_d3d12_device));
                 g_DStorageGetFactory(IID_PPV_ARGS(g_ds_factory.put()));
-                if (!g_d3d12_device || !g_ds_factory)
-                {
+                if (!g_d3d12_device || !g_ds_factory) {
                     return;
                 }
             }
 
-            if (!g_ds_queue)
-            {
+            if (!g_ds_queue) {
                 DSTORAGE_QUEUE_DESC desc{};
                 desc.Capacity = DSTORAGE_MAX_QUEUE_CAPACITY;
                 desc.Priority = DSTORAGE_PRIORITY_NORMAL;
@@ -66,8 +59,7 @@ struct DirectStorageInitializer
                 desc.Device = g_d3d12_device.get();
                 g_ds_factory->SetStagingBufferSize(g_ds_staging_buffer_size);
                 g_ds_factory->CreateQueue(&desc, IID_PPV_ARGS(g_ds_queue.put()));
-                if (!g_ds_queue)
-                {
+                if (!g_ds_queue) {
                     return;
                 }
             }
@@ -173,8 +165,9 @@ struct DStorageStreamBuf::PImpl
 
     com_ptr<IDStorageFile> file_;
     com_ptr<ID3D12Fence> fence_;
-    ScopedHandle fence_event_;
+    std::vector<ScopedHandle> events_;
     uint64_t read_size_ = 0;
+    uint32_t event_pos_ = 0;
     AtomicStatusCode state_{ status_code::idle };
 };
 
@@ -202,6 +195,12 @@ DStorageStreamBuf& DStorageStreamBuf::operator=(DStorageStreamBuf&& v) noexcept
 {
     swap(v);
     return *this;
+}
+
+void DStorageStreamBuf::swap(DStorageStreamBuf& v) noexcept
+{
+    super::swap(v);
+    std::swap(pimpl_, v.pimpl_);
 }
 
 DStorageStreamBuf::pos_type DStorageStreamBuf::seekoff(off_type off, std::ios::seekdir dir, std::ios::openmode mode)
@@ -264,8 +263,7 @@ std::streamsize DStorageStreamBuf::xsgetn(char* dst, std::streamsize count)
     char* src = this->gptr();
 
     size_t remain = count;
-    while (remain)
-    {
+    while (remain) {
         size_t n = std::min<size_t>(remain, size_t(tail - src));
         std::memcpy(dst, src, n);
         dst += n;
@@ -273,14 +271,11 @@ std::streamsize DStorageStreamBuf::xsgetn(char* dst, std::streamsize count)
         remain -= n;
         this->setg(src, src, tail);
 
-        if (remain)
-        {
-            if (underflow() == traits_type::eof())
-            {
+        if (remain) {
+            if (underflow() == traits_type::eof()) {
                 return count - remain;
             }
-            else
-            {
+            else {
                 head = buf.data();
                 tail = head + m.read_size_;
                 src = this->gptr();
@@ -295,14 +290,18 @@ int DStorageStreamBuf::underflow()
     return wait_next_block() ? 0 : traits_type::eof();
 }
 
-
 long DStorageStreamBuf::do_read()
 {
     DS_PROFILE_SCOPE("DStorageStreamBuf::do_read()");
 
     auto& m = *pimpl_;
     HRESULT hr;
-    uint64_t file_size;
+
+    auto signal_all = [&m]() {
+        for (auto& e : m.events_) {
+            ::SetEvent(e.get());
+        }
+        };
 
     {
         DS_PROFILE_SCOPE("DStorageStreamBuf::do_read(): OpenFile");
@@ -310,65 +309,51 @@ long DStorageStreamBuf::do_read()
         hr = g_ds_factory->OpenFile(m.path_.c_str(), IID_PPV_ARGS(m.file_.put()));
         if (FAILED(hr)) {
             m.state_ = status_code::error_file_open_failed;
+            signal_all();
             return hr;
         }
-    }
-    {
-        DS_PROFILE_SCOPE("DStorageStreamBuf::do_read(): GetFileInformation");
-
-        BY_HANDLE_FILE_INFORMATION info{};
-        hr = m.file_->GetFileInformation(&info);
-        if (FAILED(hr)) {
-            m.state_ = status_code::error_file_open_failed;
-            return hr;
-        }
-        file_size = (uint64_t)info.nFileSizeHigh << 32 | (uint64_t)info.nFileSizeLow;
     }
 
     {
         DS_PROFILE_SCOPE("DStorageStreamBuf::do_read(): Submit");
 
-        // allocate buffer
-        auto& buf = pimpl_->buf_;
-        DirtyResize(buf, file_size);
-        m.state_ = status_code::reading;
-
         g_d3d12_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(m.fence_.put()));
 
-        uint64_t remain = file_size;
+        auto& buf = pimpl_->buf_;
+        uint64_t remain = buf.size();
         uint64_t progress = 0;
-        while (remain > 0)
-        {
-            uint32_t readSize = (uint32_t)std::min<uint64_t>(g_ds_staging_buffer_size, remain);
+        uint64_t i = 0;
+        while (remain > 0) {
+            uint32_t read_size = (uint32_t)std::min<uint64_t>(g_ds_staging_buffer_size, remain);
             DSTORAGE_REQUEST request = {};
             request.Options.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
             request.Options.DestinationType = DSTORAGE_REQUEST_DESTINATION_MEMORY;
             request.Source.File.Source = m.file_.get();
             request.Source.File.Offset = progress;
-            request.Source.File.Size = readSize;
-            request.UncompressedSize = readSize;
+            request.Source.File.Size = read_size;
+            request.UncompressedSize = read_size;
             request.Destination.Memory.Buffer = buf.data() + progress;
-            request.Destination.Memory.Size = readSize;
+            request.Destination.Memory.Size = read_size;
             g_ds_queue->EnqueueRequest(&request);
 
-            remain -= readSize;
-            progress += readSize;
+            remain -= read_size;
+            progress += read_size;
             g_ds_queue->EnqueueSignal(m.fence_.get(), progress);
-        }
+            m.fence_->SetEventOnCompletion(progress, m.events_[i].get());
 
-        // fire event on complete
-        m.fence_event_ = ScopedHandle(::CreateEvent(nullptr, FALSE, FALSE, nullptr));
-        m.fence_->SetEventOnCompletion(progress, m.fence_event_.get());
+            ++i;
+        }
 
         // submit
         g_ds_queue->Submit();
+        m.state_ = status_code::reading;
     }
 
     {
         DS_PROFILE_SCOPE("DStorageStreamBuf::do_read(): WaitForSingleObject");
 
         // wait
-        ::WaitForSingleObject(m.fence_event_.get(), INFINITE);
+        ::WaitForSingleObject(m.events_.back().get(), INFINITE);
 
         DSTORAGE_ERROR_RECORD errorRecord{};
         g_ds_queue->RetrieveErrorRecord(&errorRecord);
@@ -381,6 +366,80 @@ long DStorageStreamBuf::do_read()
             return errorRecord.FirstFailure.HResult;
         }
     }
+}
+
+bool DStorageStreamBuf::open(std::wstring&& path)
+{
+    close();
+
+    DS_PROFILE_SCOPE("DStorageStreamBuf::open()");
+
+    auto& m = *pimpl_;
+    if (!g_ds_factory) {
+        m.state_ = status_code::error_dll_not_found;
+        return false;
+    }
+
+    // IDStorageFactory::OpenFile() can be very slow, so we run it asynchronously.
+    // also, file size can be obtained by IDStorageFile::GetFileInformation() but it requires IDStorageFactory::OpenFile().
+    // therefore, we use std::filesystem::file_size() instead. (which is reasonably fast)
+
+    m.path_ = std::move(path);
+    {
+        // get file size
+        std::error_code ec;
+        uint64_t file_size = std::filesystem::file_size(std::filesystem::path(m.path_), ec);
+        if (ec) {
+            m.state_ = status_code::error_file_open_failed;
+            return false;
+        }
+        if (file_size == 0) {
+            m.state_ = status_code::completed;
+            return true;
+        }
+
+        // allocate buffer
+        DirtyResize(m.buf_, file_size);
+        char* gp = m.buf_.data();
+        this->setg(gp, gp, gp);
+
+        // allocate events
+        size_t event_count = (file_size / g_ds_staging_buffer_size) + (file_size % g_ds_staging_buffer_size ? 1 : 0);
+        m.events_.reserve(event_count);
+        for (size_t i = 0; i < event_count; ++i) {
+            m.events_.emplace_back(::CreateEvent(nullptr, TRUE, FALSE, nullptr));
+        }
+    }
+    m.state_ = status_code::launched;
+    m.future_ = std::async(std::launch::async, [this]() { return do_read(); });
+    return true;
+}
+
+bool DStorageStreamBuf::open(std::string_view path)
+{
+    return open(ToWString(path));
+}
+
+bool DStorageStreamBuf::open(const std::wstring& path)
+{
+    return open(std::wstring(path));
+}
+
+void DStorageStreamBuf::close()
+{
+    DS_PROFILE_SCOPE("DStorageStreamBuf::close()");
+
+    auto& m = *pimpl_;
+    if (m.future_.valid()) {
+        m.future_.wait();
+    }
+    m = {};
+}
+
+bool DStorageStreamBuf::is_open() const
+{
+    status_code s = pimpl_->state_.load();
+    return s >= status_code::launched && s <= status_code::completed;
 }
 
 DStorageStreamBuf::status_code DStorageStreamBuf::state() const noexcept
@@ -410,97 +469,20 @@ bool DStorageStreamBuf::wait_next_block()
 {
     DS_PROFILE_SCOPE("DStorageStreamBuf::wait_next_block()");
 
-    bool r = false;
-
     auto& m = *pimpl_;
-    status_code s = m.state_.load();
-    if (s >= status_code::launched && s < status_code::completed) {
-        size_t pos = m.read_size_;
-        for (;;) {
-            uint64_t v = m.fence_ ? m.fence_->GetCompletedValue() : 0;
-            if (v > pos) {
-                m.read_size_ = v;
-                r = true;
-                break;
-            }
-            else if (s = m.state_.load(); s < status_code::idle || s == status_code::completed) {
-                break;
-            }
-            else {
-                // ** busy loop **
-                ::Sleep(0);
-            }
-        }
-    }
-    else if (s == status_code::completed) {
-        uint64_t v = m.fence_ ? m.fence_->GetCompletedValue() : 0;
-        if (m.read_size_ != v) {
-            m.read_size_ = v;
-            r = true;
-        }
-    }
-
-    if (r) {
-        char* gp = gptr();
-        if (!gp) {
-            gp = m.buf_.data();
-        }
-        this->setg(gp, gp, m.buf_.data() + m.read_size_);
-    }
-    return r;
-}
-
-
-bool DStorageStreamBuf::open(std::string_view path)
-{
-    return open(ToWString(path));
-}
-
-bool DStorageStreamBuf::open(const std::wstring& path)
-{
-    return open(std::wstring(path));
-}
-
-bool DStorageStreamBuf::open(std::wstring&& path)
-{
-    close();
-
-    DS_PROFILE_SCOPE("DStorageStreamBuf::open()");
-
-    auto& m = *pimpl_;
-    if (!g_ds_factory)
-    {
-        m.state_ = status_code::error_dll_not_found;
+    if (m.state_.load() <= status_code::idle) {
         return false;
     }
+    else if (m.event_pos_ < m.events_.size()) {
+        ::WaitForSingleObject(m.events_[m.event_pos_].get(), INFINITE);
+        m.read_size_ = m.fence_ ? m.fence_->GetCompletedValue() : 0;
+        m.event_pos_++;
 
-    m.path_ = std::move(path);
-    m.state_ = status_code::launched;
-    m.future_ = std::async(std::launch::async, [this]() { return do_read(); });
-    return true;
-}
-
-void DStorageStreamBuf::close()
-{
-    DS_PROFILE_SCOPE("DStorageStreamBuf::close()");
-
-    auto& m = *pimpl_;
-    if (m.future_.valid()) {
-        m.future_.wait();
+        char* gp = this->gptr();
+        this->setg(gp, gp, m.buf_.data() + m.read_size_);
+        return true;
     }
-    *pimpl_ = {};
-}
-
-bool DStorageStreamBuf::is_open() const
-{
-    status_code s = pimpl_->state_.load();
-    return s >= status_code::launched && s <= status_code::completed;
-}
-
-void DStorageStreamBuf::swap(DStorageStreamBuf& v) noexcept
-{
-    super::swap(v);
-    std::swap(pimpl_, v.pimpl_);
+    return false;
 }
 
 const char* DStorageStreamBuf::data() const noexcept

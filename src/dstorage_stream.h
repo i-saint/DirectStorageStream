@@ -58,7 +58,7 @@ public:
     status_code state() const noexcept;
     bool is_complete() const noexcept;
     bool wait();
-    bool wait_next_block(); // ** busy loop **
+    bool wait_next_block();
 
 private:
     long do_read();
