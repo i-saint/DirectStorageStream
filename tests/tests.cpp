@@ -7,7 +7,9 @@
 #include <vector>
 #include <span>
 #include <chrono>
-#include <cassert>
+
+
+#define check(...) if(!(__VA_ARGS__)) { throw std::runtime_error("failed: " #__VA_ARGS__ "\n"); }
 
 using millisec = uint64_t;
 millisec NowMS()
@@ -15,6 +17,7 @@ millisec NowMS()
     using namespace std::chrono;
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
+
 
 static void Test_MMapStream()
 {
@@ -39,13 +42,13 @@ static void Test_MMapStream()
     {
         ist::MMapStream ifs;
         ifs.open(filename, std::ios::in);
-        assert(ifs.size() == file_size);
+        check(ifs.size() == file_size);
 
         std::vector<uint32_t> data2;
         data2.resize(ifs.size() / sizeof(uint32_t));
 
         ifs.read((char*)data2.data(), ifs.size());
-        assert(data == data2);
+        check(data == data2);
     }
 }
 
@@ -71,14 +74,14 @@ static void Test_DStorageStream()
     {
         ist::DStorageStream ifs;
         ifs.open(filename, std::ios::in);
-        assert(ifs.is_open());
+        check(ifs.is_open());
 
         ifs.wait_next_block();
-        assert(ifs.read_size() == block_size);
+        check(ifs.read_size() == block_size);
         ifs.wait_next_block();
-        assert(ifs.read_size() == block_size * 2);
+        check(ifs.read_size() == block_size * 2);
         ifs.wait_next_block();
-        assert(ifs.read_size() == file_size);
+        check(ifs.read_size() == file_size);
     }
 
     // test seekg()
@@ -87,9 +90,9 @@ static void Test_DStorageStream()
         ifs.open(filename, std::ios::in);
 
         ifs.seekg(1);
-        assert(ifs.read_size() == block_size);
+        check(ifs.read_size() == block_size);
         ifs.seekg(block_size * 2 + 1);
-        assert(ifs.read_size() == file_size);
+        check(ifs.read_size() == file_size);
     }
 
     // test undeflow()
@@ -101,13 +104,13 @@ static void Test_DStorageStream()
         data.resize(file_size / sizeof(uint32_t));
 
         ifs.read((char*)data.data(), 16);
-        assert(ifs.read_size() == block_size);
+        check(ifs.read_size() == block_size);
 
         ifs.read((char*)data.data() + 16, block_size - 16);
-        assert(ifs.read_size() == block_size);
+        check(ifs.read_size() == block_size);
 
         ifs.read((char*)data.data() + block_size, file_size - block_size);
-        assert(ifs.read_size() == file_size);
+        check(ifs.read_size() == file_size);
     }
 }
 
@@ -241,8 +244,8 @@ static void Test_Benchmark()
         testDStorageFS();
         testStdFStream();
 
-        assert(total_fstream == total_mmap);
-        assert(total_fstream == total_dstorage);
+        check(total_fstream == total_mmap);
+        check(total_fstream == total_dstorage);
     }
     printf("std::fstream:\t%lfs\n", (elapsed_fstream / num_try));
     printf("MMFStream:\t%lfs\n", (elapsed_mmap / num_try));

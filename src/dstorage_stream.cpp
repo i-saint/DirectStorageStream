@@ -20,9 +20,17 @@ using winrt::com_ptr;
 // (/DELAYLOAD ならスマートに解決できるのだが、関連する全プロジェクトにこのオプションを指定するのもやりたくないので…)
 decltype(&D3D12CreateDevice) g_D3D12CreateDevice;
 decltype(&DStorageGetFactory) g_DStorageGetFactory;
-struct DSResolveImports
+
+// global variables
+static com_ptr<ID3D12Device> g_d3d12_device;
+static com_ptr<IDStorageFactory> g_ds_factory;
+static com_ptr<IDStorageQueue> g_ds_queue;
+static uint32_t g_ds_staging_buffer_size = 1024 * 1024 * 64;
+
+
+struct DirectStorageInitializer
 {
-    DSResolveImports()
+    DirectStorageInitializer()
     {
         if (HMODULE d3d12 = LoadLibraryA("d3d12.dll"))
         {
@@ -32,16 +40,40 @@ struct DSResolveImports
         {
             (void*&)g_DStorageGetFactory = ::GetProcAddress(dstorage, "DStorageGetFactory");
         }
+
+        if (!g_ds_factory)
+        {
+            if (!g_d3d12_device)
+            {
+                if (!g_D3D12CreateDevice || !g_DStorageGetFactory)
+                {
+                    return;
+                }
+                g_D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&g_d3d12_device));
+                g_DStorageGetFactory(IID_PPV_ARGS(g_ds_factory.put()));
+                if (!g_d3d12_device || !g_ds_factory)
+                {
+                    return;
+                }
+            }
+
+            if (!g_ds_queue)
+            {
+                DSTORAGE_QUEUE_DESC desc{};
+                desc.Capacity = DSTORAGE_MAX_QUEUE_CAPACITY;
+                desc.Priority = DSTORAGE_PRIORITY_NORMAL;
+                desc.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
+                desc.Device = g_d3d12_device.get();
+                g_ds_factory->SetStagingBufferSize(g_ds_staging_buffer_size);
+                g_ds_factory->CreateQueue(&desc, IID_PPV_ARGS(g_ds_queue.put()));
+                if (!g_ds_queue)
+                {
+                    return;
+                }
+            }
+        }
     }
 };
-
-
-// global variables
-static com_ptr<ID3D12Device> g_d3d12_device;
-static com_ptr<IDStorageFactory> g_ds_factory;
-static com_ptr<IDStorageQueue> g_ds_queue;
-static uint32_t g_ds_staging_buffer_size = 1024 * 1024 * 64;
-
 
 
 void DStorageStream::set_device(ID3D12Device* device, IDStorageFactory* factory, IDStorageQueue* queue)
@@ -117,6 +149,24 @@ static inline void DirtyResize(std::vector<T>& dst, size_t new_size)
 
 struct DStorageStreamBuf::PImpl
 {
+    // movable std::atomic<status_code> to make PImpl implicitly movable
+    class AtomicStatusCode : public std::atomic<status_code>
+    {
+    public:
+        using super = std::atomic<status_code>;
+        using super::super;
+
+        AtomicStatusCode(AtomicStatusCode&& v) noexcept
+        {
+            *this = std::move(v);
+        }
+        AtomicStatusCode& operator=(AtomicStatusCode&& v) noexcept
+        {
+            this->exchange(v);
+            return *this;
+        }
+    };
+
     std::vector<char> buf_;
     std::wstring path_;
     std::future<HRESULT> future_;
@@ -125,80 +175,21 @@ struct DStorageStreamBuf::PImpl
     com_ptr<ID3D12Fence> fence_;
     ScopedHandle fence_event_;
     uint64_t read_size_ = 0;
-    std::atomic<status_code> state_{ status_code::idle };
-
-
-    PImpl(const PImpl&) = delete;
-    PImpl& operator=(const PImpl&) = delete;
-    PImpl() {}
-    PImpl(PImpl&& v) noexcept
-    {
-        *this = std::move(v);
-    }
-    PImpl& operator=(PImpl&& v) noexcept
-    {
-        swap(v);
-        return *this;
-    }
-    void swap(PImpl& v) noexcept
-    {
-        std::swap(buf_, v.buf_);
-        std::swap(path_, v.path_);
-        std::swap(future_, v.future_);
-
-        std::swap(file_, v.file_);
-        std::swap(fence_, v.fence_);
-        std::swap(fence_event_, v.fence_event_);
-        std::swap(read_size_, v.read_size_);
-        state_.exchange(v.state_);
-    }
+    AtomicStatusCode state_{ status_code::idle };
 };
 
 
 DStorageStreamBuf::DStorageStreamBuf()
 {
-    static_assert(sizeof(DStorageStreamBuf::members_) >= sizeof(PImpl));
-    pimpl_ = new (members_) PImpl();
+    static DirectStorageInitializer s_resolve_imports;
 
-
-    static DSResolveImports s_resolve_imports;
-    if (!g_ds_factory)
-    {
-        if (!g_d3d12_device)
-        {
-            if (!g_D3D12CreateDevice || !g_DStorageGetFactory)
-            {
-                return;
-            }
-            g_D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&g_d3d12_device));
-            g_DStorageGetFactory(IID_PPV_ARGS(g_ds_factory.put()));
-            if (!g_d3d12_device || !g_ds_factory)
-            {
-                return;
-            }
-        }
-
-        if (!g_ds_queue)
-        {
-            DSTORAGE_QUEUE_DESC desc{};
-            desc.Capacity = DSTORAGE_MAX_QUEUE_CAPACITY;
-            desc.Priority = DSTORAGE_PRIORITY_NORMAL;
-            desc.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
-            desc.Device = g_d3d12_device.get();
-            g_ds_factory->SetStagingBufferSize(g_ds_staging_buffer_size);
-            g_ds_factory->CreateQueue(&desc, IID_PPV_ARGS(g_ds_queue.put()));
-            if (!g_ds_queue)
-            {
-                return;
-            }
-        }
-    }
+    pimpl_ = std::make_unique<PImpl>();
 }
 
 DStorageStreamBuf::~DStorageStreamBuf()
 {
     close();
-    pimpl_->~PImpl();
+    pimpl_ = {};
 }
 
 DStorageStreamBuf::DStorageStreamBuf(DStorageStreamBuf&& v) noexcept
@@ -234,11 +225,17 @@ DStorageStreamBuf::pos_type DStorageStreamBuf::seekoff(off_type off, std::ios::s
     else if (dir == std::ios::end)
         current = tail - off;
 
-    while (m.read_size_ < static_cast<uint64_t>(std::distance(head, current))) {
+    size_t distance = size_t(std::distance(head, current));
+    while (m.read_size_ < distance) {
         wait_next_block();
-        if (m.state_.load() == status_code::completed) {
+
+        status_code state = m.state_.load();
+        if (m.read_size_ == m.buf_.size() || state < status_code::idle) {
             break;
         }
+    }
+    if (distance > m.read_size_) {
+        current = head + m.read_size_;
     }
 
     this->setg(current, current, tail);
@@ -250,7 +247,7 @@ DStorageStreamBuf::pos_type DStorageStreamBuf::seekpos(pos_type pos, std::ios::o
     return seekoff(pos, std::ios::beg, mode);
 }
 
-// implement owr own xsgetn() / xsputn() because std::streambuf can't handle count of > INT_MAX
+// implement our own xsgetn() / xsputn() because std::streambuf can't handle count of > INT_MAX
 // ( https://github.com/microsoft/STL/issues/388 )
 std::streamsize DStorageStreamBuf::xsgetn(char* dst, std::streamsize count)
 {
@@ -487,8 +484,9 @@ void DStorageStreamBuf::close()
 {
     DS_PROFILE_SCOPE("DStorageStreamBuf::close()");
 
-    if (pimpl_->future_.valid()) {
-        pimpl_->future_.wait();
+    auto& m = *pimpl_;
+    if (m.future_.valid()) {
+        m.future_.wait();
     }
     *pimpl_ = {};
 }
@@ -502,7 +500,7 @@ bool DStorageStreamBuf::is_open() const
 void DStorageStreamBuf::swap(DStorageStreamBuf& v) noexcept
 {
     super::swap(v);
-    pimpl_->swap(*v.pimpl_);
+    std::swap(pimpl_, v.pimpl_);
 }
 
 const char* DStorageStreamBuf::data() const noexcept

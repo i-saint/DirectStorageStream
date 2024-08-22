@@ -16,34 +16,12 @@ struct MemoryMappedFile::PImpl
     void* data_ = nullptr;
     size_t size_ = 0;
     std::ios::openmode mode_ = 0;
-
-    PImpl(const PImpl&) = delete;
-    PImpl& operator=(const PImpl&) = delete;
-    PImpl() {}
-    PImpl(PImpl&& v) noexcept
-    {
-        *this = std::move(v);
-    }
-    PImpl& operator=(PImpl&& v) noexcept
-    {
-        swap(v);
-        return *this;
-    }
-    void swap(PImpl& v) noexcept
-    {
-        std::swap(file_, v.file_);
-        std::swap(mapping_, v.mapping_);
-        std::swap(data_, v.data_);
-        std::swap(size_, v.size_);
-        std::swap(mode_, v.mode_);
-    }
 };
 
 
 MemoryMappedFile::MemoryMappedFile()
 {
-    static_assert(sizeof(MemoryMappedFile::members_) >= sizeof(PImpl));
-    pimpl_ = new (members_) PImpl();
+    pimpl_ = std::make_unique<PImpl>();
 }
 
 MemoryMappedFile::MemoryMappedFile(MemoryMappedFile&& v) noexcept
@@ -55,7 +33,7 @@ MemoryMappedFile::MemoryMappedFile(MemoryMappedFile&& v) noexcept
 MemoryMappedFile::~MemoryMappedFile()
 {
     close();
-    pimpl_->~PImpl();
+    pimpl_ = {};
 }
 
 MemoryMappedFile& MemoryMappedFile::operator=(MemoryMappedFile&& v) noexcept
@@ -67,7 +45,7 @@ MemoryMappedFile& MemoryMappedFile::operator=(MemoryMappedFile&& v) noexcept
 
 void MemoryMappedFile::swap(MemoryMappedFile& v)
 {
-    pimpl_->swap(*v.pimpl_);
+    std::swap(pimpl_, v.pimpl_);
 }
 
 bool MemoryMappedFile::is_open() const
@@ -95,7 +73,7 @@ std::ios::openmode MemoryMappedFile::mode() const
     return pimpl_->mode_;
 }
 
-bool MemoryMappedFile::open(const char* _path, std::ios::openmode mode)
+bool MemoryMappedFile::open(const char* path, std::ios::openmode mode)
 {
     close();
 
@@ -105,24 +83,20 @@ bool MemoryMappedFile::open(const char* _path, std::ios::openmode mode)
     m.mode_ = mode;
     if (mode & std::ios::out) {
         // open for write
-        auto do_open = [](const char* path) {
-            return ::CreateFileA(path,
-                GENERIC_READ | GENERIC_WRITE,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                NULL,
-                CREATE_ALWAYS,
-                FILE_ATTRIBUTE_NORMAL,
-                NULL);
-            };
-        m.file_ = ScopedHandle(do_open(_path));
+        m.file_ = ScopedHandle(::CreateFileA(path,
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL,
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            NULL));
         if (m.file_) {
             return true;
         }
     }
-    else if (mode & std::ios::in)
-    {
+    else if (mode & std::ios::in) {
         // open for read
-        m.file_ = ScopedHandle(::CreateFileA(_path,
+        m.file_ = ScopedHandle(::CreateFileA(path,
             GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             NULL,
@@ -157,8 +131,9 @@ void MemoryMappedFile::close()
 
 void* MemoryMappedFile::map(size_t capacity)
 {
-    if (!is_open())
+    if (!is_open()) {
         return nullptr;
+    }
     unmap();
 
     DS_PROFILE_SCOPE("MemoryMappedFile::map()");
@@ -351,6 +326,9 @@ int MMapStreamBuf::underflow()
     }
 }
 
+// implement our own xsgetn() / xsputn() because std::streambuf can't handle count of > INT_MAX
+// ( https://github.com/microsoft/STL/issues/388 )
+
 std::streamsize MMapStreamBuf::xsgetn(char* ptr, std::streamsize count)
 {
     char* head = (char*)mmap_.data();
@@ -358,7 +336,7 @@ std::streamsize MMapStreamBuf::xsgetn(char* ptr, std::streamsize count)
     char* current = this->gptr();
     size_t remaining = size_t(tail - current);
     size_t readSize = std::min<size_t>(count, remaining);
-    memcpy(ptr, current, readSize);
+    std::memcpy(ptr, current, readSize);
 
     current += readSize;
     this->setg(current, current, tail);
@@ -376,7 +354,7 @@ std::streamsize MMapStreamBuf::xsputn(const char* ptr, std::streamsize count)
         tail = head + mmap_.size();
         current = this->pptr();
     }
-    memcpy(current, ptr, count);
+    std::memcpy(current, ptr, count);
 
     current += count;
     this->setp(current, tail);
@@ -390,7 +368,6 @@ char* MMapStreamBuf::reserve(size_t size)
         char* head = (char*)mmap_.map(size);
         char* tail = head + size;
         char* current = head + pos;
-        // 32bit の制限があるため、current を first にしておく
         this->setp(current, tail);
     }
     return (char*)mmap_.data();

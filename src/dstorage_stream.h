@@ -64,8 +64,7 @@ private:
     long do_read();
 
     struct PImpl;
-    PImpl* pimpl_ = nullptr;
-    char members_[128];
+    std::unique_ptr<PImpl> pimpl_;
 };
 
 

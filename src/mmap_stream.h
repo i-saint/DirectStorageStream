@@ -34,8 +34,7 @@ public:
 
 private:
     struct PImpl;
-    PImpl* pimpl_ = nullptr;
-    char members_[64];
+    std::unique_ptr<PImpl> pimpl_;
 };
 
 
