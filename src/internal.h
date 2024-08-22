@@ -1,4 +1,6 @@
 ﻿#pragma once
+#define NOMINMAX
+
 #include <cstring>
 #include <cassert>
 #include <memory>

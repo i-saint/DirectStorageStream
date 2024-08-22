@@ -191,7 +191,7 @@ MMapStreamBuf::MMapStreamBuf(MMapStreamBuf&& v) noexcept
 MMapStreamBuf::~MMapStreamBuf()
 {
     if (mmap_.is_open() && mmap_.mode() & std::ios::out) {
-        size_t filesize = std::max<size_t>(pmax_, size_t(this->pptr() - data()));
+        size_t filesize = std::max(pmax_, size_t(this->pptr() - data()));
         mmap_.truncate(filesize);
     }
 }
@@ -247,7 +247,7 @@ MMapStreamBuf::pos_type MMapStreamBuf::seekoff(off_type off, std::ios::seekdir d
 
     if (mode & std::ios::out) {
         char* current = this->pptr();
-        pmax_ = std::max<size_t>(pmax_, size_t(current - head));
+        pmax_ = std::max(pmax_, size_t(current - head));
 
         if (dir == std::ios::beg)
             current = head + off;

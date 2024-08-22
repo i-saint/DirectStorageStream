@@ -206,12 +206,6 @@ void DStorageStreamBuf::swap(DStorageStreamBuf& v) noexcept
 DStorageStreamBuf::pos_type DStorageStreamBuf::seekoff(off_type off, std::ios::seekdir dir, std::ios::openmode mode)
 {
     auto& m = *pimpl_;
-    status_code s = m.state_.load();
-    bool is_active = s >= status_code::launched && s < status_code::completed;
-    if (is_active && m.read_size_ == 0) {
-        wait_next_block();
-    }
-
     auto& buf = pimpl_->buf_;
     char* head = buf.data();
     char* tail = head + buf.size();
@@ -226,16 +220,11 @@ DStorageStreamBuf::pos_type DStorageStreamBuf::seekoff(off_type off, std::ios::s
 
     size_t distance = size_t(std::distance(head, current));
     while (m.read_size_ < distance) {
-        wait_next_block();
-
-        status_code state = m.state_.load();
-        if (m.read_size_ == m.buf_.size() || state < status_code::idle) {
+        if (!wait_next_block()) {
             break;
         }
     }
-    if (distance > m.read_size_) {
-        current = head + m.read_size_;
-    }
+    current = std::min(current, head + m.read_size_);
 
     this->setg(current, current, tail);
     return pos_type(current - head);
@@ -251,12 +240,6 @@ DStorageStreamBuf::pos_type DStorageStreamBuf::seekpos(pos_type pos, std::ios::o
 std::streamsize DStorageStreamBuf::xsgetn(char* dst, std::streamsize count)
 {
     auto& m = *pimpl_;
-    if (m.read_size_ == 0) {
-        if (underflow() == traits_type::eof()) {
-            return 0;
-        }
-    }
-
     auto& buf = m.buf_;
     char* head = buf.data();
     char* tail = head + m.read_size_;
@@ -264,7 +247,7 @@ std::streamsize DStorageStreamBuf::xsgetn(char* dst, std::streamsize count)
 
     size_t remain = count;
     while (remain) {
-        size_t n = std::min<size_t>(remain, size_t(tail - src));
+        size_t n = std::min(remain, size_t(tail - src));
         std::memcpy(dst, src, n);
         dst += n;
         src += n;
@@ -438,8 +421,8 @@ void DStorageStreamBuf::close()
 
 bool DStorageStreamBuf::is_open() const
 {
-    status_code s = pimpl_->state_.load();
-    return s >= status_code::launched && s <= status_code::completed;
+    auto& m = *pimpl_;
+    return m.state_.load() >= status_code::launched;
 }
 
 DStorageStreamBuf::status_code DStorageStreamBuf::state() const noexcept
@@ -459,10 +442,10 @@ bool DStorageStreamBuf::wait()
     auto& m = *pimpl_;
     if (m.future_.valid()) {
         m.future_.wait();
-        wait_next_block(); // for setg()
-        return true;
+        m.future_ = {};
+        while (wait_next_block()) {} // for setg() and advance event_pos_
     }
-    return false;
+    return m.state_.load() == status_code::completed;
 }
 
 bool DStorageStreamBuf::wait_next_block()
