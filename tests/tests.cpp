@@ -1,5 +1,7 @@
 ﻿#include "mmap_stream.h"
 #include "dstorage_stream.h"
+#include "internal.h"
+
 #include <fstream>
 #include <random>
 #include <vector>
@@ -16,6 +18,8 @@ millisec NowMS()
 
 static void Test_MMapStream()
 {
+    DS_PROFILE_SCOPE("Test_MMapStream()");
+
     const char* filename = "Test_MMapStreamStream.bin";
     const uint32_t block_size = ist::MMapStreamBuf::default_reserve_size;
     const uint32_t file_size = block_size * 2 + 1234 * 4;
@@ -47,6 +51,8 @@ static void Test_MMapStream()
 
 static void Test_DStorageStream()
 {
+    DS_PROFILE_SCOPE("Test_DStorageStream()");
+
     const char* filename = "Test_DStorageStream.bin";
     const uint32_t block_size = ist::DStorageStream::get_staging_buffer_size();
     const uint32_t file_size = block_size * 2 + 1234 * 4;
@@ -110,6 +116,8 @@ static void Test_Benchmark()
     // create an 8 GB file containing a sequence of random floats.
     // measure the time that takes to read the file and calculate the sum.
 
+    DS_PROFILE_SCOPE("Test_Benchmark()");
+
     if (!std::filesystem::exists("data.bin"))
     {
         printf("maiking data.bin...\n");
@@ -145,6 +153,8 @@ static void Test_Benchmark()
     double total_dstorage = 0;
 
     auto testStdFStream = [&]() {
+        DS_PROFILE_SCOPE("std::fstream");
+
         double total = 0.0;
         std::fstream ifs;
         std::vector<float> data;
@@ -175,6 +185,8 @@ static void Test_Benchmark()
         };
 
     auto testMMFS = [&]() {
+        DS_PROFILE_SCOPE("MMapStream");
+
         double total = 0.0;
         ist::MMapStream ifs;
 
@@ -196,6 +208,8 @@ static void Test_Benchmark()
         };
 
     auto testDStorageFS = [&]() {
+        DS_PROFILE_SCOPE("DStorageStream");
+
         double total = 0.0;
         ist::DStorageStream ifs;
 

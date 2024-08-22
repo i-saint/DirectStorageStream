@@ -61,7 +61,7 @@ public:
     bool wait_next_block(); // ** busy loop **
 
 private:
-    long begin_read();
+    long do_read();
 
     struct PImpl;
     PImpl* pimpl_ = nullptr;

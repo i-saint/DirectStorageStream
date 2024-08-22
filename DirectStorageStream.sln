@@ -7,24 +7,15 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "DirectStorageStream", "Dire
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
-		Debug|ARM64 = Debug|ARM64
 		Debug|x64 = Debug|x64
-		Release|ARM64 = Release|ARM64
 		Release|x64 = Release|x64
-		VTune|ARM64 = VTune|ARM64
 		VTune|x64 = VTune|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.Debug|ARM64.ActiveCfg = Debug|ARM64
-		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.Debug|ARM64.Build.0 = Debug|ARM64
 		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.Debug|x64.ActiveCfg = Debug|x64
 		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.Debug|x64.Build.0 = Debug|x64
-		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.Release|ARM64.ActiveCfg = Release|ARM64
-		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.Release|ARM64.Build.0 = Release|ARM64
 		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.Release|x64.ActiveCfg = Release|x64
 		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.Release|x64.Build.0 = Release|x64
-		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.VTune|ARM64.ActiveCfg = VTune|ARM64
-		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.VTune|ARM64.Build.0 = VTune|ARM64
 		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.VTune|x64.ActiveCfg = VTune|x64
 		{C91C9273-8D96-4141-A3B1-13562B29B2E4}.VTune|x64.Build.0 = VTune|x64
 	EndGlobalSection

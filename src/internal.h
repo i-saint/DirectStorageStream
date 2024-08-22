@@ -20,7 +20,10 @@ public:
         __itt_event_start(event_);
     }
 
-    ~ProfileScope() { __itt_event_end(event_); }
+    ~ProfileScope()
+    {
+        __itt_event_end(event_);
+    }
 
 private:
     __itt_event event_{};
@@ -40,11 +43,10 @@ namespace ist {
 
 struct handle_closer
 {
-    void operator()(HANDLE h) noexcept
+    void operator()(HANDLE h) const noexcept
     {
         assert(h != INVALID_HANDLE_VALUE);
-        if (h)
-        {
+        if (h) {
             ::CloseHandle(h);
         }
     }

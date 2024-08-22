@@ -299,16 +299,16 @@ int DStorageStreamBuf::underflow()
 }
 
 
-long DStorageStreamBuf::begin_read()
+long DStorageStreamBuf::do_read()
 {
-    DS_PROFILE_SCOPE("DStorageStreamBuf::begin_read()");
+    DS_PROFILE_SCOPE("DStorageStreamBuf::do_read()");
 
     auto& m = *pimpl_;
     HRESULT hr;
     uint64_t file_size;
 
     {
-        DS_PROFILE_SCOPE("DStorageStreamBuf::begin_read() OpenFile");
+        DS_PROFILE_SCOPE("DStorageStreamBuf::do_read(): OpenFile");
 
         hr = g_ds_factory->OpenFile(m.path_.c_str(), IID_PPV_ARGS(m.file_.put()));
         if (FAILED(hr)) {
@@ -317,7 +317,7 @@ long DStorageStreamBuf::begin_read()
         }
     }
     {
-        DS_PROFILE_SCOPE("DStorageStreamBuf::begin_read() GetFileInformation");
+        DS_PROFILE_SCOPE("DStorageStreamBuf::do_read(): GetFileInformation");
 
         BY_HANDLE_FILE_INFORMATION info{};
         hr = m.file_->GetFileInformation(&info);
@@ -329,7 +329,7 @@ long DStorageStreamBuf::begin_read()
     }
 
     {
-        DS_PROFILE_SCOPE("DStorageStreamBuf::begin_read() Submit");
+        DS_PROFILE_SCOPE("DStorageStreamBuf::do_read(): Submit");
 
         // allocate buffer
         auto& buf = pimpl_->buf_;
@@ -368,7 +368,7 @@ long DStorageStreamBuf::begin_read()
     }
 
     {
-        DS_PROFILE_SCOPE("DStorageStreamBuf::begin_read() Wait");
+        DS_PROFILE_SCOPE("DStorageStreamBuf::do_read(): WaitForSingleObject");
 
         // wait
         ::WaitForSingleObject(m.fence_event_.get(), INFINITE);
@@ -479,7 +479,7 @@ bool DStorageStreamBuf::open(std::wstring&& path)
 
     m.path_ = std::move(path);
     m.state_ = status_code::launched;
-    m.future_ = std::async(std::launch::async, [this]() { return begin_read(); });
+    m.future_ = std::async(std::launch::async, [this]() { return do_read(); });
     return true;
 }
 

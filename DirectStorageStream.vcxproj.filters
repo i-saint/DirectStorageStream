@@ -10,6 +10,9 @@
     <ClInclude Include="src\dstorage_stream.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="src\internal.h">
+      <Filter>src</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\dstorage_stream.cpp">
