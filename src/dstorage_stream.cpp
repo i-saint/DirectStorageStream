@@ -115,16 +115,14 @@ void DStorageStream::force_file_buffering(bool v)
 }
 
 
-template<class T>
-T* VirtualAllocator<T>::allocate(size_t size)
+void* valloc(size_t size)
 {
-    return (T*)::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    return ::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 }
 
-template<class T>
-void VirtualAllocator<T>::deallocate(value_type* ptr, size_t size)
+void vfree(void* ptr)
 {
-    ::VirtualFree(ptr, size, MEM_RELEASE);
+    ::VirtualFree(ptr, 0, MEM_RELEASE);
 }
 
 static std::wstring ToWString(std::string_view str)
@@ -161,13 +159,14 @@ struct DStorageStreamBuf::PImpl
         }
     };
 
-    HugeVector<char> buf_;
+    buffer_ptr buf_;
     std::wstring path_;
     std::future<HRESULT> future_;
 
     com_ptr<IDStorageFile> file_;
     com_ptr<ID3D12Fence> fence_;
     std::vector<ScopedHandle> events_;
+    uint64_t file_size_ = 0;
     uint64_t read_size_ = 0;
     uint32_t event_pos_ = 0;
     AtomicStatusCode state_{ status_code::idle };
@@ -210,9 +209,8 @@ void DStorageStreamBuf::swap(DStorageStreamBuf& v) noexcept
 DStorageStreamBuf::pos_type DStorageStreamBuf::seekoff(off_type off, std::ios::seekdir dir, std::ios::openmode mode)
 {
     auto& m = *pimpl_;
-    auto& buf = m.buf_;
-    char* head = buf.data();
-    char* tail = head + buf.size();
+    char* head = m.buf_.get();
+    char* tail = head + m.file_size_;
 
     char* current = this->gptr();
     if (dir == std::ios::beg)
@@ -244,8 +242,7 @@ DStorageStreamBuf::pos_type DStorageStreamBuf::seekpos(pos_type pos, std::ios::o
 std::streamsize DStorageStreamBuf::xsgetn(char* dst, std::streamsize count)
 {
     auto& m = *pimpl_;
-    auto& buf = m.buf_;
-    char* head = buf.data();
+    char* head = m.buf_.get();
     char* tail = head + m.read_size_;
     char* src = this->gptr();
 
@@ -263,7 +260,7 @@ std::streamsize DStorageStreamBuf::xsgetn(char* dst, std::streamsize count)
                 return count - remain;
             }
             else {
-                head = buf.data();
+                head = m.buf_.get();
                 tail = head + m.read_size_;
                 src = this->gptr();
             }
@@ -306,8 +303,7 @@ long DStorageStreamBuf::do_read()
 
         g_d3d12_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(m.fence_.put()));
 
-        auto& buf = pimpl_->buf_;
-        uint64_t remain = buf.size();
+        uint64_t remain = m.file_size_;
         uint64_t progress = 0;
         uint64_t i = 0;
         while (remain > 0) {
@@ -319,7 +315,7 @@ long DStorageStreamBuf::do_read()
             request.Source.File.Offset = progress;
             request.Source.File.Size = read_size;
             request.UncompressedSize = read_size;
-            request.Destination.Memory.Buffer = buf.data() + progress;
+            request.Destination.Memory.Buffer = m.buf_.get() + progress;
             request.Destination.Memory.Size = read_size;
             g_ds_queue->EnqueueRequest(&request);
 
@@ -375,23 +371,23 @@ bool DStorageStreamBuf::open(std::wstring&& path)
     {
         // get file size
         std::error_code ec;
-        uint64_t file_size = std::filesystem::file_size(std::filesystem::path(m.path_), ec);
+        m.file_size_ = std::filesystem::file_size(std::filesystem::path(m.path_), ec);
         if (ec) {
             m.state_ = status_code::error_file_open_failed;
             return false;
         }
-        if (file_size == 0) {
+        if (m.file_size_ == 0) {
             m.state_ = status_code::completed;
             return true;
         }
 
         // allocate buffer
-        DirtyResize(m.buf_, file_size);
-        char* gp = m.buf_.data();
+        m.buf_ = buffer_ptr((char*)valloc(m.file_size_));
+        char* gp = m.buf_.get();
         this->setg(gp, gp, gp);
 
         // allocate events
-        size_t event_count = (file_size / g_ds_staging_buffer_size) + (file_size % g_ds_staging_buffer_size ? 1 : 0);
+        size_t event_count = (m.file_size_ / g_ds_staging_buffer_size) + (m.file_size_ % g_ds_staging_buffer_size ? 1 : 0);
         m.events_.reserve(event_count);
         for (size_t i = 0; i < event_count; ++i) {
             m.events_.emplace_back(::CreateEvent(nullptr, TRUE, FALSE, nullptr));
@@ -466,7 +462,7 @@ bool DStorageStreamBuf::wait_next_block()
         m.event_pos_++;
 
         char* gp = this->gptr();
-        this->setg(gp, gp, m.buf_.data() + m.read_size_);
+        this->setg(gp, gp, m.buf_.get() + m.read_size_);
         return true;
     }
     return false;
@@ -474,12 +470,12 @@ bool DStorageStreamBuf::wait_next_block()
 
 const char* DStorageStreamBuf::data() const noexcept
 {
-    return pimpl_->buf_.data();
+    return pimpl_->buf_.get();
 }
 
 size_t DStorageStreamBuf::file_size() const noexcept
 {
-    return pimpl_->buf_.size();
+    return pimpl_->file_size_;
 }
 
 size_t DStorageStreamBuf::read_size() const noexcept
@@ -487,7 +483,7 @@ size_t DStorageStreamBuf::read_size() const noexcept
     return pimpl_->read_size_;
 }
 
-HugeVector<char>&& DStorageStreamBuf::extract() noexcept
+DStorageStreamBuf::buffer_ptr&& DStorageStreamBuf::extract() noexcept
 {
     return std::move(pimpl_->buf_);
 }
@@ -561,7 +557,7 @@ size_t DStorageStream::read_size() const noexcept
     return buf_.read_size();
 }
 
-HugeVector<char>&& DStorageStream::extract() noexcept
+DStorageStream::buffer_ptr&& DStorageStream::extract() noexcept
 {
     return std::move(buf_.extract());
 }

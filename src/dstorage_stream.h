@@ -10,19 +10,14 @@ struct IDStorageQueue;
 
 namespace ist {
 
-// std::allocator compatible VirtualAlloc() / VirtualFree().
-// huge buffer can take long time to free() for some reason (300ms to free 8GB on my PC).
-// we use VirtualAlloc() / VirtualFree() to avoid it.
-template<class T>
-class VirtualAllocator
+// wrapped VirtualAlloc() / VirtualFree()
+void* valloc(size_t size);
+void vfree(void* ptr);
+
+struct vfree_deleter
 {
-public:
-    using value_type = T;
-    T* allocate(size_t size);
-    void deallocate(value_type* ptr, size_t size);
+    void operator()(void* p) const noexcept { vfree(p); }
 };
-template<class T>
-using HugeVector = std::vector<T, VirtualAllocator<T>>;
 
 
 class DStorageStreamBuf : public std::streambuf
@@ -30,6 +25,11 @@ class DStorageStreamBuf : public std::streambuf
     using super = std::streambuf;
 
 public:
+    // std::vector is difficult to resize without zero-clear. so we use std::unique_ptr<char[]> instead.
+    // also, huge buffer allocated by malloc() can take long time to free() for some reason. (I observed 300ms to free 8GB)
+    // so we use VirtualAlloc() / VirtualFree() instead.
+    using buffer_ptr = std::unique_ptr<char[], vfree_deleter>;
+
     // movable but non-copyable
     DStorageStreamBuf(DStorageStreamBuf&& v) noexcept;
     DStorageStreamBuf& operator=(DStorageStreamBuf&& v) noexcept;
@@ -56,7 +56,7 @@ public:
     const char* data() const noexcept;
     size_t file_size() const noexcept; // == size of buffer, but potentially data is not read yet.
     size_t read_size() const noexcept; // size of data actually read.
-    HugeVector<char>&& extract() noexcept;
+    buffer_ptr&& extract() noexcept;
 
     // state and wait methods. these are called internally on read(), so you do not need to care about usually.
     enum class status_code {
@@ -104,6 +104,7 @@ public:
     static void force_file_buffering(bool v);
 
 public:
+    using buffer_ptr = DStorageStreamBuf::buffer_ptr;
     using status_code = DStorageStreamBuf::status_code;
 
     // movable but non-copyable
@@ -125,7 +126,7 @@ public:
     const char* data() const noexcept;
     size_t file_size() const noexcept;
     size_t read_size() const noexcept;
-    HugeVector<char>&& extract() noexcept;
+    buffer_ptr&& extract() noexcept;
 
     status_code state() const noexcept;
     bool is_complete() const noexcept;

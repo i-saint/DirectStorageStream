@@ -12,8 +12,10 @@
 
 #define check(...) if(!(__VA_ARGS__)) { throw std::runtime_error("failed: " #__VA_ARGS__ "\n"); }
 
+using buffer_ptr = ist::DStorageStream::buffer_ptr;
+
 using nanosec = uint64_t;
-nanosec NowNS()
+static nanosec NowNS()
 {
     using namespace std::chrono;
     return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
@@ -115,17 +117,17 @@ static void Test_DStorageStream()
     }
 }
 
-static std::vector<float> GenRandom(size_t n, int seed = 0)
+static buffer_ptr GenRandom(size_t size_in_byte, int seed = 0)
 {
     std::mt19937 engine(seed);
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
 
-    std::vector<float> result;
-    ist::DirtyResize(result, n);
-    for (size_t i = 0; i < n; ++i) {
-        result[i] = dist(engine);
+    buffer_ptr buf{ (char*)ist::valloc(size_in_byte ) };
+    std::span data{ (float*)buf.get(), size_in_byte / sizeof(float)};
+    for (float& v : data) {
+        v = dist(engine);
     }
-    return result;
+    return buf;
 }
 
 template<class T>
@@ -136,15 +138,11 @@ static double CalcTotal(const char* path)
         std::fstream ifs;
         ifs.open(path, std::ios::in | std::ios::binary);
         if (ifs) {
-            size_t size = 0;
-            ifs.seekg(0, std::ios::end);
-            size = ifs.tellg() / sizeof(float);
-            ifs.seekg(0, std::ios::beg);
+            size_t size = std::filesystem::file_size(path);
+            buffer_ptr buf{ (char*)ist::valloc(size) };
+            ifs.read(buf.get(), size);
 
-            std::vector<float> data;
-            ist::DirtyResize(data, size);
-            ifs.read((char*)data.data(), size * sizeof(float));
-
+            std::span data{ (const float*)buf.get(), size / sizeof(float)};
             for (float v : data) {
                 total += v;
             }
@@ -201,8 +199,8 @@ static void Test_Benchmark()
             if (!std::filesystem::exists(filename)) {
                 printf("making %s...", filename);
                 std::ofstream of(filename, std::ios::out | std::ios::binary);
-                std::vector<float> data = GenRandom(size / sizeof(float), i);
-                of.write((const char*)data.data(), data.size() * sizeof(float));
+                buffer_ptr data = GenRandom(size, i);
+                of.write(data.get(), size);
                 printf(" done\n");
             }
             ++i;
