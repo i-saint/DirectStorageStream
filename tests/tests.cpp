@@ -123,7 +123,7 @@ static void Test_Benchmark()
 
     if (!std::filesystem::exists("data.bin"))
     {
-        printf("maiking data.bin...\n");
+        printf("making data.bin...\n");
         millisec start = NowMS();
 
         std::ofstream of("data.bin", std::ios::out | std::ios::binary);
@@ -253,8 +253,18 @@ static void Test_Benchmark()
 
 }
 
-int main()
+int main(int argc, char* argv[])
 {
+    for (int i = 1; i < argc; ++i) {
+        std::string_view param(argv[i]);
+        if (param == "--disable-bypassio") {
+            ist::DStorageStream::disable_bypassio(true);
+        }
+        else if (param == "--force-file-buffering") {
+            ist::DStorageStream::force_file_buffering(true);
+        }
+    }
+
     Test_MMapStream();
     Test_DStorageStream();
     Test_Benchmark();

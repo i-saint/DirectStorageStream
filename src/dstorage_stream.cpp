@@ -19,9 +19,11 @@ using winrt::com_ptr;
 // 古き悪しき LoadLibrary() & GetProcAddress() でインポートを解決する。
 // (/DELAYLOAD ならスマートに解決できるのだが、関連する全プロジェクトにこのオプションを指定するのもやりたくないので…)
 decltype(&D3D12CreateDevice) g_D3D12CreateDevice;
+decltype(&DStorageSetConfiguration1) g_DStorageSetConfiguration1;
 decltype(&DStorageGetFactory) g_DStorageGetFactory;
 
 // global variables
+static DSTORAGE_CONFIGURATION1 g_ds_config = {};
 static com_ptr<ID3D12Device> g_d3d12_device;
 static com_ptr<IDStorageFactory> g_ds_factory;
 static com_ptr<IDStorageQueue> g_ds_queue;
@@ -36,6 +38,7 @@ struct DirectStorageInitializer
             (void*&)g_D3D12CreateDevice = ::GetProcAddress(d3d12, "D3D12CreateDevice");
         }
         if (HMODULE dstorage = LoadLibraryA("dstorage.dll")) {
+            (void*&)g_DStorageSetConfiguration1 = ::GetProcAddress(dstorage, "DStorageSetConfiguration1");
             (void*&)g_DStorageGetFactory = ::GetProcAddress(dstorage, "DStorageGetFactory");
         }
 
@@ -45,6 +48,11 @@ struct DirectStorageInitializer
                     return;
                 }
                 g_D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&g_d3d12_device));
+
+                if (g_DStorageSetConfiguration1) {
+                    g_DStorageSetConfiguration1(&g_ds_config);
+                }
+
                 g_DStorageGetFactory(IID_PPV_ARGS(g_ds_factory.put()));
                 if (!g_d3d12_device || !g_ds_factory) {
                     return;
@@ -75,7 +83,7 @@ void DStorageStream::set_device(ID3D12Device* device, IDStorageFactory* factory,
     g_ds_queue.attach(queue);
 }
 
-void DStorageStream::reset_device()
+void DStorageStream::release_device()
 {
     g_d3d12_device = {};
     g_ds_factory = {};
@@ -90,6 +98,19 @@ void DStorageStream::set_staging_buffer_size(uint32_t size)
 uint32_t DStorageStream::get_staging_buffer_size()
 {
     return g_ds_staging_buffer_size;
+}
+
+void DStorageStream::disable_bypassio(bool v)
+{
+    g_ds_config.DisableBypassIO = v;
+}
+
+void DStorageStream::force_file_buffering(bool v)
+{
+    g_ds_config.ForceFileBuffering = v;
+    if (v) {
+        g_ds_config.DisableBypassIO = TRUE;
+    }
 }
 
 

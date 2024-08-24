@@ -51,10 +51,11 @@ public:
 
     void swap(DStorageStreamBuf& v) noexcept;
     const char* data() const noexcept;
-    size_t file_size() const noexcept;
-    size_t read_size() const noexcept;
+    size_t file_size() const noexcept; // == size of buffer, but potentially data is not read yet.
+    size_t read_size() const noexcept; // size of data actually read.
     std::vector<char>&& extract() noexcept;
 
+    // state and wait methods. these are called internally on read(), so you do not need to care about usually.
     status_code state() const noexcept;
     bool is_complete() const noexcept;
     bool wait();
@@ -73,14 +74,21 @@ class DStorageStream : public std::istream
     using super = std::istream;
 
 public:
-    // call set_device() if you want to share the existing device, otherwise the device will be created internally.
+    // call this if you want to share existing device/factory/queue, otherwise these will be created internally.
     static void set_device(ID3D12Device* device, IDStorageFactory* factory = nullptr, IDStorageQueue* queue = nullptr);
-    static void reset_device();
+    static void release_device();
 
     // staging buffer size is the maximum read size per request.
     // when large file is opened, it will be split into multiple requests.
     static void set_staging_buffer_size(uint32_t size);
     static uint32_t get_staging_buffer_size();
+
+    // disable Bypass IO even if the drive supports.
+    static void disable_bypassio(bool v);
+
+    // enable file buffering. this may improve performance on HDD, but may worsen on SSD.
+    // this implicitly disables Bypass IO.
+    static void force_file_buffering(bool v);
 
 public:
     using status_code = DStorageStreamBuf::status_code;
@@ -109,7 +117,7 @@ public:
     status_code state() const noexcept;
     bool is_complete() const noexcept;
     bool wait();
-    bool wait_next_block(); // ** busy loop **
+    bool wait_next_block();
 
 private:
     DStorageStreamBuf buf_;
