@@ -2,7 +2,8 @@
 #include "internal.h"
 
 #include <atomic>
-#include <chrono>
+#include <future>
+#include <filesystem>
 #include <dstorage.h>
 #include <dxgi1_4.h>
 #include <winrt/base.h>
@@ -114,6 +115,18 @@ void DStorageStream::force_file_buffering(bool v)
 }
 
 
+template<class T>
+T* VirtualAllocator<T>::allocate(size_t size)
+{
+    return (T*)::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+}
+
+template<class T>
+void VirtualAllocator<T>::deallocate(value_type* ptr, size_t size)
+{
+    ::VirtualFree(ptr, size, MEM_RELEASE);
+}
+
 static std::wstring ToWString(std::string_view str)
 {
     size_t wclen = ::MultiByteToWideChar(CP_UTF8, MB_PRECOMPOSED, str.data(), (int)str.size(), nullptr, 0);
@@ -122,38 +135,6 @@ static std::wstring ToWString(std::string_view str)
     wpath.resize(wclen);
     ::MultiByteToWideChar(CP_UTF8, MB_PRECOMPOSED, str.data(), (int)str.size(), wpath.data(), (int)wpath.size());
     return wpath;
-}
-
-// resize std::vector without zero-clear
-// ( https://qiita.com/i_saint/items/59c394a28a5244ec94e1 )
-template<class T>
-static inline void DirtyResize(std::vector<T>& dst, size_t new_size)
-{
-#ifdef _DEBUG
-    dst.resize(new_size);
-#else
-    struct Proxy
-    {
-        T value;
-#pragma warning(disable:26495)
-        // value is uninitialized by intention
-        Proxy() {}
-#pragma warning(default:26495)
-    };
-    static_assert(sizeof(T) == sizeof(Proxy));
-
-    if (new_size <= dst.capacity()) {
-        reinterpret_cast<std::vector<Proxy>&>(dst).resize(new_size);
-    }
-    else {
-        std::vector<T> tmp;
-        size_t new_capacity = std::max<size_t>(dst.capacity() * 2, new_size);
-        tmp.reserve(new_capacity);
-        reinterpret_cast<std::vector<Proxy>&>(tmp).resize(new_size);
-        std::memcpy(tmp.data(), dst.data(), sizeof(T) * dst.size());
-        dst.swap(tmp);
-    }
-#endif
 }
 #pragma endregion Misc
 
@@ -180,7 +161,7 @@ struct DStorageStreamBuf::PImpl
         }
     };
 
-    std::vector<char> buf_;
+    HugeVector<char> buf_;
     std::wstring path_;
     std::future<HRESULT> future_;
 
@@ -195,6 +176,7 @@ struct DStorageStreamBuf::PImpl
 
 DStorageStreamBuf::DStorageStreamBuf()
 {
+    DS_PROFILE_SCOPE("DStorageStreamBuf::DStorageStreamBuf()");
     static DirectStorageInitializer s_resolve_imports;
 
     pimpl_ = std::make_unique<PImpl>();
@@ -202,6 +184,7 @@ DStorageStreamBuf::DStorageStreamBuf()
 
 DStorageStreamBuf::~DStorageStreamBuf()
 {
+    DS_PROFILE_SCOPE("DStorageStreamBuf::~DStorageStreamBuf()");
     close();
     pimpl_ = {};
 }
@@ -227,7 +210,7 @@ void DStorageStreamBuf::swap(DStorageStreamBuf& v) noexcept
 DStorageStreamBuf::pos_type DStorageStreamBuf::seekoff(off_type off, std::ios::seekdir dir, std::ios::openmode mode)
 {
     auto& m = *pimpl_;
-    auto& buf = pimpl_->buf_;
+    auto& buf = m.buf_;
     char* head = buf.data();
     char* tail = head + buf.size();
 
@@ -361,15 +344,15 @@ long DStorageStreamBuf::do_read()
 
         DSTORAGE_ERROR_RECORD errorRecord{};
         g_ds_queue->RetrieveErrorRecord(&errorRecord);
-        if (SUCCEEDED(errorRecord.FirstFailure.HResult)) {
+        hr = errorRecord.FirstFailure.HResult;
+        if (SUCCEEDED(hr)) {
             m.state_ = status_code::completed;
-            return S_OK;
         }
         else {
             m.state_ = status_code::error_unknown;
-            return errorRecord.FirstFailure.HResult;
         }
     }
+    return hr;
 }
 
 bool DStorageStreamBuf::open(std::wstring&& path)
@@ -504,7 +487,7 @@ size_t DStorageStreamBuf::read_size() const noexcept
     return pimpl_->read_size_;
 }
 
-std::vector<char>&& DStorageStreamBuf::extract() noexcept
+HugeVector<char>&& DStorageStreamBuf::extract() noexcept
 {
     return std::move(pimpl_->buf_);
 }
@@ -578,7 +561,7 @@ size_t DStorageStream::read_size() const noexcept
     return buf_.read_size();
 }
 
-std::vector<char>&& DStorageStream::extract() noexcept
+HugeVector<char>&& DStorageStream::extract() noexcept
 {
     return std::move(buf_.extract());
 }

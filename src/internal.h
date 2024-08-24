@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cassert>
 #include <memory>
+#include <vector>
 #include <windows.h>
 
 // VTune
@@ -54,6 +55,39 @@ struct handle_closer
     }
 };
 using ScopedHandle = std::unique_ptr<void, handle_closer>;
+
+
+// resize std::vector without zero-clear
+// ( https://qiita.com/i_saint/items/59c394a28a5244ec94e1 )
+template<class T, template<class> class Allocator>
+inline void DirtyResize(std::vector<T, Allocator<T>>& dst, size_t new_size)
+{
+#ifdef _DEBUG
+    dst.resize(new_size);
+#else
+    struct Proxy
+    {
+        T value;
+#pragma warning(disable:26495)
+        // value is uninitialized by intention
+        Proxy() {}
+#pragma warning(default:26495)
+    };
+    static_assert(sizeof(T) == sizeof(Proxy));
+
+    if (new_size <= dst.capacity()) {
+        reinterpret_cast<std::vector<Proxy, Allocator<Proxy>>&>(dst).resize(new_size);
+    }
+    else {
+        std::vector<T, Allocator<T>> tmp;
+        size_t new_capacity = std::max<size_t>(dst.capacity() * 2, new_size);
+        tmp.reserve(new_capacity);
+        reinterpret_cast<std::vector<Proxy, Allocator<Proxy>>&>(tmp).resize(new_size);
+        std::memcpy(tmp.data(), dst.data(), sizeof(T) * dst.size());
+        dst.swap(tmp);
+    }
+#endif
+}
 
 } // namespace ist
 

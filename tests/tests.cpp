@@ -7,6 +7,7 @@
 #include <vector>
 #include <span>
 #include <chrono>
+#include <filesystem>
 
 
 #define check(...) if(!(__VA_ARGS__)) { throw std::runtime_error("failed: " #__VA_ARGS__ "\n"); }
@@ -114,7 +115,7 @@ static void Test_DStorageStream()
     }
 }
 
-static void Test_Benchmark()
+static void Test_BenchmarkLasrgeFile()
 {
     // create an 8 GB file containing a sequence of random floats.
     // measure the time that takes to read the file and calculate the sum.
@@ -133,7 +134,7 @@ static void Test_Benchmark()
         std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
 
         std::vector<float> data;
-        data.resize(1024 * 1024 * 1024 / sizeof(float));
+        ist::DirtyResize(data, 1024 * 1024 * 1024 / sizeof(float));
         for (int i = 0; i < 8; ++i) {
             for (auto& d : data) {
                 d = dist(engine);
@@ -226,7 +227,6 @@ static void Test_Benchmark()
                     total += v;
                 }
                 pos = ifs.read_size();
-                //printf("%llu\n", pos);
             }
         }
         double elapsed = (NowMS() - start) / 1000.0;
@@ -267,5 +267,5 @@ int main(int argc, char* argv[])
 
     Test_MMapStream();
     Test_DStorageStream();
-    Test_Benchmark();
+    Test_BenchmarkLasrgeFile();
 }

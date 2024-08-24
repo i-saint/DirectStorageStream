@@ -1,8 +1,7 @@
 ﻿#pragma once
 #include <iostream>
-#include <filesystem>
-#include <functional>
-#include <future>
+#include <vector>
+#include <memory>
 
 struct ID3D12Device;
 struct IDStorageFactory;
@@ -10,6 +9,21 @@ struct IDStorageQueue;
 
 
 namespace ist {
+
+// std::allocator compatible VirtualAlloc() / VirtualFree().
+// huge buffer can take long time to free() for some reason (300ms to free 8GB on my PC).
+// we use VirtualAlloc() / VirtualFree() to avoid it.
+template<class T>
+class VirtualAllocator
+{
+public:
+    using value_type = T;
+    T* allocate(size_t size);
+    void deallocate(value_type* ptr, size_t size);
+};
+template<class T>
+using HugeVector = std::vector<T, VirtualAllocator<T>>;
+
 
 class DStorageStreamBuf : public std::streambuf
 {
@@ -53,7 +67,7 @@ public:
     const char* data() const noexcept;
     size_t file_size() const noexcept; // == size of buffer, but potentially data is not read yet.
     size_t read_size() const noexcept; // size of data actually read.
-    std::vector<char>&& extract() noexcept;
+    HugeVector<char>&& extract() noexcept;
 
     // state and wait methods. these are called internally on read(), so you do not need to care about usually.
     status_code state() const noexcept;
@@ -112,7 +126,7 @@ public:
     const char* data() const noexcept;
     size_t file_size() const noexcept;
     size_t read_size() const noexcept;
-    std::vector<char>&& extract() noexcept;
+    HugeVector<char>&& extract() noexcept;
 
     status_code state() const noexcept;
     bool is_complete() const noexcept;
