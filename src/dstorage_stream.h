@@ -30,17 +30,6 @@ class DStorageStreamBuf : public std::streambuf
     using super = std::streambuf;
 
 public:
-    enum class status_code {
-        idle,
-        launched,
-        reading,
-        completed,
-
-        error_dll_not_found = -10000,
-        error_file_open_failed,
-        error_unknown,
-    };
-
     // movable but non-copyable
     DStorageStreamBuf(DStorageStreamBuf&& v) noexcept;
     DStorageStreamBuf& operator=(DStorageStreamBuf&& v) noexcept;
@@ -70,6 +59,16 @@ public:
     HugeVector<char>&& extract() noexcept;
 
     // state and wait methods. these are called internally on read(), so you do not need to care about usually.
+    enum class status_code {
+        idle,
+        launched,
+        reading,
+        completed,
+
+        error_dll_not_found = -10000,
+        error_file_open_failed,
+        error_unknown,
+    };
     status_code state() const noexcept;
     bool is_complete() const noexcept;
     bool wait();

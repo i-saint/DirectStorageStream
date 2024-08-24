@@ -12,11 +12,11 @@
 
 #define check(...) if(!(__VA_ARGS__)) { throw std::runtime_error("failed: " #__VA_ARGS__ "\n"); }
 
-using millisec = uint64_t;
-millisec NowMS()
+using nanosec = uint64_t;
+nanosec NowNS()
 {
     using namespace std::chrono;
-    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+    return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
 
@@ -115,111 +115,53 @@ static void Test_DStorageStream()
     }
 }
 
-static void Test_BenchmarkLasrgeFile()
+static std::vector<float> GenRandom(size_t n, int seed = 0)
 {
-    // create an 8 GB file containing a sequence of random floats.
-    // measure the time that takes to read the file and calculate the sum.
+    std::mt19937 engine(seed);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
 
-    DS_PROFILE_SCOPE("Test_Benchmark()");
-
-    if (!std::filesystem::exists("data.bin"))
-    {
-        printf("making data.bin...\n");
-        millisec start = NowMS();
-
-        std::ofstream of("data.bin", std::ios::out | std::ios::binary);
-
-        std::random_device seed_gen;
-        std::mt19937 engine(seed_gen());
-        std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-
-        std::vector<float> data;
-        ist::DirtyResize(data, 1024 * 1024 * 1024 / sizeof(float));
-        for (int i = 0; i < 8; ++i) {
-            for (auto& d : data) {
-                d = dist(engine);
-            }
-            of.write((const char*)data.data(), data.size() * sizeof(float));
-            printf("%llu bytes written.\n", 1024llu * 1024llu * 1024llu * (i + 1));
-        }
-
-        millisec elapsed = NowMS() - start;
-        printf("done. (%lfs)\n", elapsed / 1000.0);
+    std::vector<float> result;
+    ist::DirtyResize(result, n);
+    for (size_t i = 0; i < n; ++i) {
+        result[i] = dist(engine);
     }
+    return result;
+}
 
-
-    constexpr int num_try = 4;
-    double elapsed_fstream = 0;
-    double elapsed_mmap = 0;
-    double elapsed_dstorage = 0;
-    double total_fstream = 0;
-    double total_mmap = 0;
-    double total_dstorage = 0;
-
-    auto testStdFStream = [&]() {
-        DS_PROFILE_SCOPE("std::fstream");
-
-        double total = 0.0;
+template<class T>
+static double CalcTotal(const char* path)
+{
+    double total = 0.0;
+    if constexpr (std::is_same_v<T, std::fstream>) {
         std::fstream ifs;
-        std::vector<float> data;
-
-        millisec start = NowMS();
-        ifs.open("data.bin", std::ios::in | std::ios::binary);
-        if (ifs)
-        {
+        ifs.open(path, std::ios::in | std::ios::binary);
+        if (ifs) {
             size_t size = 0;
             ifs.seekg(0, std::ios::end);
             size = ifs.tellg() / sizeof(float);
             ifs.seekg(0, std::ios::beg);
 
-            data.resize(size);
+            std::vector<float> data;
+            ist::DirtyResize(data, size);
             ifs.read((char*)data.data(), size * sizeof(float));
 
             for (float v : data) {
                 total += v;
             }
         }
-        double elapsed = (NowMS() - start) / 1000.0;
-        elapsed_fstream += elapsed;
-        total_fstream = total;
-
-        double mbps = (data.size() * 4 / (1024 * 1024) / elapsed);
-        printf("std::fstream:\t%.1lfs (%.1lfMB/s)\n", elapsed, mbps);
-        return total;
-        };
-
-    auto testMMFS = [&]() {
-        DS_PROFILE_SCOPE("MMapStream");
-
-        double total = 0.0;
+    }
+    else if constexpr (std::is_same_v<T, ist::MMapStream>) {
         ist::MMapStream ifs;
-
-        millisec start = NowMS();
-        if (ifs.open("data.bin", std::ios::in))
-        {
+        if (ifs.open(path, std::ios::in)) {
             std::span data{ (const float*)ifs.data(), ifs.size() / sizeof(float) };
             for (float v : data) {
                 total += v;
             }
         }
-        double elapsed = (NowMS() - start) / 1000.0;
-        elapsed_mmap += elapsed;
-        total_mmap = total;
-
-        double mbps = (ifs.size() / (1024 * 1024) / elapsed);
-        printf("MMFStream:\t%.1lfs (%.1lfMB/s)\n", elapsed, mbps);
-        return total;
-        };
-
-    auto testDStorageFS = [&]() {
-        DS_PROFILE_SCOPE("DStorageStream");
-
-        double total = 0.0;
+    }
+    else if constexpr (std::is_same_v<T, ist::DStorageStream>) {
         ist::DStorageStream ifs;
-
-        millisec start = NowMS();
-        if (ifs.open("data.bin"))
-        {
+        if (ifs.open(path)) {
             size_t pos = 0;
             while (ifs.wait_next_block()) {
                 std::span data{ (const float*)(ifs.data() + pos), (ifs.read_size() - pos) / sizeof(float) };
@@ -229,29 +171,82 @@ static void Test_BenchmarkLasrgeFile()
                 pos = ifs.read_size();
             }
         }
-        double elapsed = (NowMS() - start) / 1000.0;
-        elapsed_dstorage += elapsed;
-        total_dstorage = total;
-
-        double mbps = (ifs.file_size() / (1024 * 1024) / elapsed);
-        printf("DStorageStream:\t%.1lfs (%.1lfMB/s)\n", elapsed, mbps);
-        return total;
-        };
-
-
-    for (int i = 0; i < num_try; ++i) {
-        testMMFS();
-        testDStorageFS();
-        testStdFStream();
-
-        check(total_fstream == total_mmap);
-        check(total_fstream == total_dstorage);
     }
-    printf("std::fstream:\t%lfs\n", (elapsed_fstream / num_try));
-    printf("MMFStream:\t%lfs\n", (elapsed_mmap / num_try));
-    printf("DStorageStream:\t%lfs\n", (elapsed_dstorage / num_try));
-
+    else {
+        static_assert(std::is_same_v<T, std::fstream>);
+    }
+    return total;
 }
+
+static void Test_Benchmark()
+{
+    DS_PROFILE_SCOPE("Test_Benchmark()");
+
+    constexpr size_t KiB = 1024;
+    constexpr size_t MiB = 1024 * 1024;
+    constexpr size_t GiB = 1024 * 1024 * 1024;
+    std::tuple<const char*, size_t> table[] = {
+        {"data_4K.bin", 4 * KiB},
+        {"data_256K.bin", 256 * KiB},
+        {"data_4MB.bin", 4 * MiB},
+        {"data_64MB.bin", 64 * MiB},
+        {"data_256MB.bin", 256 * MiB},
+        {"data_1GB.bin", 1 * GiB},
+        {"data_8GB.bin", 8 * GiB},
+    };
+
+    {
+        int i = 0;
+        for (const auto& [filename, size] : table) {
+            if (!std::filesystem::exists(filename)) {
+                printf("making %s...", filename);
+                std::ofstream of(filename, std::ios::out | std::ios::binary);
+                std::vector<float> data = GenRandom(size / sizeof(float), i);
+                of.write((const char*)data.data(), data.size() * sizeof(float));
+                printf(" done\n");
+            }
+            ++i;
+        }
+    }
+
+    constexpr int num_try = 3;
+    for (const auto& [filename, size] : table) {
+        double total_fstream = 0;
+        double total_mmap = 0;
+        double total_dstorage = 0;
+
+        printf("file size %llu:\n", size);
+        {
+            for (int i = 0; i < num_try; ++i) {
+                DS_PROFILE_SCOPE("DStorageStream (%lluB)", size);
+                nanosec start = NowNS();
+                total_dstorage = CalcTotal<ist::DStorageStream>(filename);
+                double elapsed = (NowNS() - start) / 1000000000.0;
+                double mbps = (double)size / (1024 * 1024) / elapsed;
+                printf("DStorageStream:\t%.2lfms (%.1lfMB/s)\n", elapsed * 1000, mbps);
+            }
+            for (int i = 0; i < num_try; ++i) {
+                DS_PROFILE_SCOPE("MMapStream (%lluB)", size);
+                nanosec start = NowNS();
+                total_mmap = CalcTotal<ist::MMapStream>(filename);
+                double elapsed = (NowNS() - start) / 1000000000.0;
+                double mbps = (double)size / (1024 * 1024) / elapsed;
+                printf("MMapStream:\t%.2lfms (%.1lfMB/s)\n", elapsed * 1000, mbps);
+            }
+            for (int i = 0; i < num_try; ++i) {
+                DS_PROFILE_SCOPE("std::fstream (%lluB)", size);
+                nanosec start = NowNS();
+                total_fstream = CalcTotal<std::fstream>(filename);
+                double elapsed = (NowNS() - start) / 1000000000.0;
+                double mbps = (double)size / (1024 * 1024) / elapsed;
+                printf("std::fstream:\t%.2lfms (%.1lfMB/s)\n", elapsed * 1000, mbps);
+            }
+            check(total_fstream == total_mmap);
+            check(total_fstream == total_dstorage);
+        }
+    }
+}
+
 
 int main(int argc, char* argv[])
 {
@@ -267,5 +262,5 @@ int main(int argc, char* argv[])
 
     Test_MMapStream();
     Test_DStorageStream();
-    Test_BenchmarkLasrgeFile();
+    Test_Benchmark();
 }

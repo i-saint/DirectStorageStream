@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <cassert>
+#include <cstdarg>
 #include <memory>
 #include <vector>
 #include <windows.h>
@@ -17,9 +18,13 @@ namespace ist {
 class ProfileScope
 {
 public:
-    ProfileScope(const char* name)
+    ProfileScope(const char* format, ...)
     {
-        event_ = __itt_event_create(name, (int)std::strlen(name));
+        va_list args;
+        va_start(args, format);
+        char buf[1024];
+        vsnprintf(buf, sizeof(buf), format, args);
+        event_ = __itt_event_create(buf, (int)std::strlen(buf));
         __itt_event_start(event_);
     }
 
