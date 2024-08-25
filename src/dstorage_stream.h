@@ -115,9 +115,10 @@ public:
 
     DStorageStream();
 
-    bool open(std::string_view path, std::ios::openmode mode = std::ios::in);
-    bool open(const std::wstring& path, std::ios::openmode mode = std::ios::in);
-    bool open(std::wstring&& path, std::ios::openmode mode = std::ios::in);
+    // mode is always std::ios::in | std::ios::binary
+    bool open(std::string_view path);
+    bool open(const std::wstring& path);
+    bool open(std::wstring&& path);
     void close();
     bool is_open() const;
 

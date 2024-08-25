@@ -36,15 +36,18 @@ static void Test_MMapStream()
         data[i] = (uint32_t)i;
     }
 
+    // test write
     {
         ist::MMapStream of;
         of.open(filename, std::ios::out);
         of.write((char*)data.data(), data.size() * sizeof(uint32_t));
     }
 
+    // test read
     {
         ist::MMapStream ifs;
         ifs.open(filename, std::ios::in);
+        check(ifs.is_open() && ifs.good());
         check(ifs.size() == file_size);
 
         std::vector<uint32_t> data2;
@@ -52,6 +55,17 @@ static void Test_MMapStream()
 
         ifs.read((char*)data2.data(), ifs.size());
         check(data == data2);
+
+        char tmp;
+        ifs.read(&tmp, 1);
+        check(ifs.eof());
+    }
+
+    // test error handling
+    {
+        ist::MMapStream ifs;
+        ifs.open("not_exist.bin", std::ios::in);
+        check(!ifs.is_open() && ifs.fail());
     }
 }
 
@@ -76,8 +90,8 @@ static void Test_DStorageStream()
     // test wait_next_block()
     {
         ist::DStorageStream ifs;
-        ifs.open(filename, std::ios::in);
-        check(ifs.is_open());
+        ifs.open(filename);
+        check(ifs.is_open() && ifs.good());
 
         ifs.wait_next_block();
         check(ifs.read_size() == block_size);
@@ -90,7 +104,7 @@ static void Test_DStorageStream()
     // test seekg()
     {
         ist::DStorageStream ifs;
-        ifs.open(filename, std::ios::in);
+        ifs.open(filename);
 
         ifs.seekg(1);
         check(ifs.read_size() == block_size);
@@ -101,7 +115,7 @@ static void Test_DStorageStream()
     // test undeflow()
     {
         ist::DStorageStream ifs;
-        ifs.open(filename, std::ios::in);
+        ifs.open(filename);
 
         std::vector<uint32_t> data;
         data.resize(file_size / sizeof(uint32_t));
@@ -114,6 +128,18 @@ static void Test_DStorageStream()
 
         ifs.read((char*)data.data() + block_size, file_size - block_size);
         check(ifs.read_size() == file_size);
+
+        char tmp;
+        ifs.read(&tmp, 1);
+        check(ifs.read_size() == file_size);
+        check(ifs.eof());
+    }
+
+    // test error handling
+    {
+        ist::DStorageStream ifs;
+        ifs.open("not_exist.bin");
+        check(!ifs.is_open() && ifs.fail());
     }
 }
 
@@ -258,7 +284,12 @@ int main(int argc, char* argv[])
         }
     }
 
-    Test_MMapStream();
-    Test_DStorageStream();
-    Test_Benchmark();
+    try {
+        Test_MMapStream();
+        Test_DStorageStream();
+        Test_Benchmark();
+    }
+    catch (const std::exception& e) {
+        printf("failed: %s\n", e.what());
+    }
 }

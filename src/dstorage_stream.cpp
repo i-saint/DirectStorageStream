@@ -2,6 +2,7 @@
 #include "internal.h"
 
 #include <atomic>
+#include <mutex>
 #include <future>
 #include <filesystem>
 #include <dstorage.h>
@@ -29,6 +30,7 @@ static com_ptr<ID3D12Device> g_d3d12_device;
 static com_ptr<IDStorageFactory> g_ds_factory;
 static com_ptr<IDStorageQueue> g_ds_queue;
 static uint32_t g_ds_staging_buffer_size = 1024 * 1024 * 64;
+static std::mutex g_ds_mutex;
 
 
 struct DirectStorageInitializer
@@ -290,18 +292,20 @@ long DStorageStreamBuf::do_read()
     {
         DS_PROFILE_SCOPE("DStorageStreamBuf::do_read(): OpenFile");
 
+        // OpenFile() to large file may take long.
         hr = g_ds_factory->OpenFile(m.path_.c_str(), IID_PPV_ARGS(m.file_.put()));
         if (FAILED(hr)) {
             m.state_ = status_code::error_file_open_failed;
             signal_all();
             return hr;
         }
+        g_d3d12_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(m.fence_.put()));
     }
 
     {
         DS_PROFILE_SCOPE("DStorageStreamBuf::do_read(): Submit");
 
-        g_d3d12_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(m.fence_.put()));
+        std::unique_lock lock{ g_ds_mutex };
 
         uint64_t remain = m.file_size_;
         uint64_t progress = 0;
@@ -338,9 +342,9 @@ long DStorageStreamBuf::do_read()
         // wait
         ::WaitForSingleObject(m.events_.back().get(), INFINITE);
 
-        DSTORAGE_ERROR_RECORD errorRecord{};
-        g_ds_queue->RetrieveErrorRecord(&errorRecord);
-        hr = errorRecord.FirstFailure.HResult;
+        DSTORAGE_ERROR_RECORD rec{};
+        g_ds_queue->RetrieveErrorRecord(&rec);
+        hr = rec.FirstFailure.HResult;
         if (SUCCEEDED(hr)) {
             m.state_ = status_code::completed;
         }
@@ -508,17 +512,25 @@ DStorageStream& DStorageStream::operator=(DStorageStream&& v) noexcept
     return *this;
 }
 
-bool DStorageStream::open(std::string_view path, std::ios::openmode)
+bool DStorageStream::open(std::string_view path)
 {
-    return buf_.open(path);
+    return open(ToWString(path));
 }
-bool DStorageStream::open(const std::wstring& path, std::ios::openmode)
+bool DStorageStream::open(const std::wstring& _path)
 {
-    return buf_.open(path);
+    std::wstring path = _path;
+    return open(std::move(path));
 }
-bool DStorageStream::open(std::wstring&& path, std::ios::openmode)
+bool DStorageStream::open(std::wstring&& path)
 {
-    return buf_.open(std::move(path));
+    if (buf_.open(std::move(path))) {
+        this->clear();
+        return true;
+    }
+    else {
+        this->setstate(std::ios::failbit);
+        return false;
+    }
 }
 
 void DStorageStream::close()
