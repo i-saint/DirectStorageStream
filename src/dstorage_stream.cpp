@@ -119,6 +119,14 @@ void DStorageStream::force_file_buffering(bool v)
 
 void* valloc(size_t size)
 {
+    static const size_t page_size = []() {
+        ::SYSTEM_INFO si;
+        ::GetSystemInfo(&si);
+        return si.dwPageSize;
+        }();
+
+    // align to page size
+    size = (size + page_size - 1) & ~(page_size - 1);
     return ::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 }
 

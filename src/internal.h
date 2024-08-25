@@ -49,17 +49,43 @@ private:
 
 namespace ist {
 
-struct handle_closer
+class ScopedHandle
 {
-    void operator()(HANDLE h) const noexcept
+public:
+    ScopedHandle(const ScopedHandle&) = delete;
+    ScopedHandle& operator=(const ScopedHandle&) = delete;
+    ScopedHandle(ScopedHandle&& v) noexcept { *this = std::move(v); }
+    ScopedHandle& operator=(ScopedHandle&& v) noexcept { swap(v); return *this; }
+
+    ScopedHandle() {}
+    ScopedHandle(HANDLE v) { reset(v); }
+
+    ~ScopedHandle() { reset(); }
+
+    void swap(ScopedHandle& v) noexcept
     {
-        assert(h != INVALID_HANDLE_VALUE);
-        if (h) {
-            ::CloseHandle(h);
-        }
+        std::swap(value_, v.value_);
     }
+
+    void reset(HANDLE v = INVALID_HANDLE_VALUE)
+    {
+        if (value_ != INVALID_HANDLE_VALUE) {
+            ::CloseHandle(value_);
+        }
+        value_ = v;
+    }
+
+    HANDLE get() const { return value_; }
+
+    bool operator==(const ScopedHandle& v) const { return value_ == v.value_; }
+    bool operator!=(const ScopedHandle& v) const { return value_ != v.value_; }
+    operator bool() const { return value_ != INVALID_HANDLE_VALUE; }
+
+    operator HANDLE() const { return value_; }
+
+private:
+    HANDLE value_ = INVALID_HANDLE_VALUE;
 };
-using ScopedHandle = std::unique_ptr<void, handle_closer>;
 
 } // namespace ist
 

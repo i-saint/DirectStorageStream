@@ -50,7 +50,7 @@ void MemoryMappedFile::swap(MemoryMappedFile& v)
 
 bool MemoryMappedFile::is_open() const
 {
-    return pimpl_->file_.get();
+    return pimpl_->file_;
 }
 
 void* MemoryMappedFile::data()
