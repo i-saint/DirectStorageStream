@@ -12,7 +12,7 @@
 
 #define check(...) if(!(__VA_ARGS__)) { throw std::runtime_error("failed: " #__VA_ARGS__ "\n"); }
 
-using buffer_ptr = ist::DStorageStream::buffer_ptr;
+using BufferPtr = ist::BufferPtr;
 
 using nanosec = uint64_t;
 static nanosec NowNS()
@@ -143,12 +143,12 @@ static void Test_DStorageStream()
     }
 }
 
-static buffer_ptr GenRandom(size_t size_in_byte, int seed = 0)
+static BufferPtr GenRandom(size_t size_in_byte, int seed = 0)
 {
     std::mt19937 engine(seed);
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
 
-    buffer_ptr buf{ (char*)ist::valloc(size_in_byte ) };
+    BufferPtr buf = ist::CreateBuffer(size_in_byte);
     std::span data{ (float*)buf.get(), size_in_byte / sizeof(float)};
     for (float& v : data) {
         v = dist(engine);
@@ -165,7 +165,7 @@ static double CalcTotal(const char* path)
         ifs.open(path, std::ios::in | std::ios::binary);
         if (ifs) {
             size_t size = std::filesystem::file_size(path);
-            buffer_ptr buf{ (char*)ist::valloc(size) };
+            BufferPtr buf = ist::CreateBuffer(size);
             ifs.read(buf.get(), size);
 
             std::span data{ (const float*)buf.get(), size / sizeof(float)};
@@ -225,7 +225,7 @@ static void Test_Benchmark()
             if (!std::filesystem::exists(filename)) {
                 printf("making %s...", filename);
                 std::ofstream of(filename, std::ios::out | std::ios::binary);
-                buffer_ptr data = GenRandom(size, i);
+                BufferPtr data = GenRandom(size, i);
                 of.write(data.get(), size);
                 printf(" done\n");
             }

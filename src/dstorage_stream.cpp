@@ -8,6 +8,7 @@
 #include <dstorage.h>
 #include <dxgi1_4.h>
 #include <winrt/base.h>
+#include <ppl.h>
 
 
 namespace ist {
@@ -30,6 +31,7 @@ static com_ptr<ID3D12Device> g_d3d12_device;
 static com_ptr<IDStorageFactory> g_ds_factory;
 static com_ptr<IDStorageQueue> g_ds_queue;
 static uint32_t g_ds_staging_buffer_size = 1024 * 1024 * 64;
+static bool g_ds_async_free_buffer = true;
 static std::mutex g_ds_mutex;
 
 
@@ -116,8 +118,29 @@ void DStorageStream::force_file_buffering(bool v)
     }
 }
 
+void DStorageStream::enable_async_free_buffer(bool v)
+{
+    g_ds_async_free_buffer = v;
+}
 
-void* valloc(size_t size)
+
+void BufferDeleter::operator()(void* ptr) const
+{
+    // huge buffer can take long time to free. so, do it asynchronously.
+    auto do_delete = [ptr]() {
+        DS_PROFILE_SCOPE("BufferDeleter::operator()");
+        ::VirtualFree(ptr, 0, MEM_RELEASE);
+        };
+
+    if (g_ds_async_free_buffer) {
+        concurrency::create_task(do_delete);
+    }
+    else {
+        do_delete();
+    }
+}
+
+BufferPtr CreateBuffer(size_t size)
 {
     static const size_t page_size = []() {
         ::SYSTEM_INFO si;
@@ -127,13 +150,10 @@ void* valloc(size_t size)
 
     // align to page size
     size = (size + page_size - 1) & ~(page_size - 1);
-    return ::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    return BufferPtr((char*)::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
 }
 
-void vfree(void* ptr)
-{
-    ::VirtualFree(ptr, 0, MEM_RELEASE);
-}
+
 
 static std::wstring ToWString(std::string_view str)
 {
@@ -169,7 +189,7 @@ struct DStorageStreamBuf::PImpl
         }
     };
 
-    buffer_ptr buf_;
+    BufferPtr buf_;
     std::wstring path_;
     std::future<HRESULT> future_;
 
@@ -394,7 +414,7 @@ bool DStorageStreamBuf::open(std::wstring&& path)
         }
 
         // allocate buffer
-        m.buf_ = buffer_ptr((char*)valloc(m.file_size_));
+        m.buf_ = CreateBuffer(m.file_size_);
         char* gp = m.buf_.get();
         this->setg(gp, gp, gp);
 
@@ -495,7 +515,7 @@ size_t DStorageStreamBuf::read_size() const noexcept
     return pimpl_->read_size_;
 }
 
-DStorageStreamBuf::buffer_ptr&& DStorageStreamBuf::extract() noexcept
+BufferPtr&& DStorageStreamBuf::extract() noexcept
 {
     return std::move(pimpl_->buf_);
 }
@@ -577,7 +597,7 @@ size_t DStorageStream::read_size() const noexcept
     return buf_.read_size();
 }
 
-DStorageStream::buffer_ptr&& DStorageStream::extract() noexcept
+BufferPtr&& DStorageStream::extract() noexcept
 {
     return std::move(buf_.extract());
 }
