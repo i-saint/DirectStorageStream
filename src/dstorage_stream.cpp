@@ -32,6 +32,7 @@ static com_ptr<IDStorageFactory> g_ds_factory;
 static com_ptr<IDStorageQueue> g_ds_queue;
 static uint32_t g_ds_staging_buffer_size = 1024 * 1024 * 64;
 static bool g_ds_async_free_buffer = true;
+static bool g_ds_debug = false;
 static std::mutex g_ds_mutex;
 
 
@@ -62,6 +63,10 @@ struct DirectStorageInitializer
                 if (!g_d3d12_device || !g_ds_factory) {
                     return;
                 }
+                g_ds_factory->SetStagingBufferSize(g_ds_staging_buffer_size);
+                if (g_ds_debug) {
+                    g_ds_factory->SetDebugFlags(DSTORAGE_DEBUG_SHOW_ERRORS | DSTORAGE_DEBUG_BREAK_ON_ERROR);
+                }
             }
 
             if (!g_ds_queue) {
@@ -70,7 +75,6 @@ struct DirectStorageInitializer
                 desc.Priority = DSTORAGE_PRIORITY_NORMAL;
                 desc.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
                 desc.Device = g_d3d12_device.get();
-                g_ds_factory->SetStagingBufferSize(g_ds_staging_buffer_size);
                 g_ds_factory->CreateQueue(&desc, IID_PPV_ARGS(g_ds_queue.put()));
                 if (!g_ds_queue) {
                     return;
@@ -107,15 +111,31 @@ uint32_t DStorageStream::get_staging_buffer_size()
 
 void DStorageStream::disable_bypassio(bool v)
 {
-    g_ds_config.DisableBypassIO = v;
+    if (v) {
+        g_ds_config.ForceMappingLayer = TRUE;
+        g_ds_config.DisableBypassIO = TRUE;
+    }
+    else {
+        g_ds_config.ForceMappingLayer = FALSE;
+        g_ds_config.DisableBypassIO = FALSE;
+    }
 }
 
 void DStorageStream::force_file_buffering(bool v)
 {
-    g_ds_config.ForceFileBuffering = v;
     if (v) {
-        g_ds_config.DisableBypassIO = TRUE;
+        g_ds_config.ForceFileBuffering = TRUE;
+        disable_bypassio(true);
     }
+    else {
+        g_ds_config.ForceFileBuffering = FALSE;
+        disable_bypassio(false);
+    }
+}
+
+void DStorageStream::enable_debug(bool v)
+{
+    g_ds_debug = true;
 }
 
 void DStorageStream::enable_async_free_buffer(bool v)

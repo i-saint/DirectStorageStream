@@ -279,7 +279,10 @@ int main(int argc, char* argv[])
 {
     for (int i = 1; i < argc; ++i) {
         std::string_view param(argv[i]);
-        if (param == "--disable-bypassio") {
+        if (param == "--enable-debug") {
+            ist::DStorageStream::enable_debug(true);
+        }
+        else if (param == "--disable-bypassio") {
             ist::DStorageStream::disable_bypassio(true);
         }
         else if (param == "--force-file-buffering") {

@@ -94,7 +94,9 @@ public:
     // this implicitly disables Bypass IO.
     static void force_file_buffering(bool v);
 
-    static void enable_async_free_buffer(bool);
+    static void enable_debug(bool v);
+
+    static void enable_async_free_buffer(bool v);
 
 public:
     using status_code = DStorageStreamBuf::status_code;
