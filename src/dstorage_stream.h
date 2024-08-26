@@ -39,17 +39,15 @@ public:
     int underflow() final override;
     using super::gptr;
 
-    bool open(std::string_view path);
-    bool open(const std::wstring& path);
     bool open(std::wstring&& path);
     void close();
     bool is_open() const;
 
     void swap(DStorageStreamBuf& v) noexcept;
-    const char* data() const noexcept;
-    size_t file_size() const noexcept; // == size of buffer, but potentially data is not read yet.
-    size_t read_size() const noexcept; // size of data actually read.
-    BufferPtr&& extract() noexcept;
+    const char* data() const;
+    size_t file_size() const; // == size of buffer, but potentially data is not read yet.
+    size_t read_size() const; // size of data actually read.
+    BufferPtr&& extract();
 
     // state and wait methods. these are called internally on read(), so you do not need to care about usually.
     enum class status_code {
@@ -62,8 +60,8 @@ public:
         error_file_open_failed,
         error_unknown,
     };
-    status_code state() const noexcept;
-    bool is_complete() const noexcept;
+    status_code state() const;
+    bool is_complete() const;
     bool wait();
     bool wait_next_block();
 
@@ -109,22 +107,22 @@ public:
 
     DStorageStream();
 
-    // mode is always std::ios::in | std::ios::binary
-    bool open(std::string_view path);
-    bool open(const std::wstring& path);
-    bool open(std::wstring&& path);
+    // mode is just for compatibility with std::fstream. it is just ignored and always behave as std::ios::in | std::ios::binary.
+    bool open(std::string_view path, std::ios::openmode mode = std::ios::in | std::ios::binary);
+    bool open(const std::wstring& path, std::ios::openmode mode = std::ios::in | std::ios::binary);
+    bool open(std::wstring&& path, std::ios::openmode mode = std::ios::in | std::ios::binary);
     void close();
     bool is_open() const;
 
     void swap(DStorageStream& v) noexcept;
-    DStorageStreamBuf* rdbuf() const noexcept;
-    const char* data() const noexcept;
-    size_t file_size() const noexcept;
-    size_t read_size() const noexcept;
-    BufferPtr&& extract() noexcept;
+    DStorageStreamBuf* rdbuf() const;
+    const char* data() const;
+    size_t file_size() const;
+    size_t read_size() const;
+    BufferPtr&& extract();
 
-    status_code state() const noexcept;
-    bool is_complete() const noexcept;
+    status_code state() const;
+    bool is_complete() const;
     bool wait();
     bool wait_next_block();
 

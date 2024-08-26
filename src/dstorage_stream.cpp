@@ -430,16 +430,6 @@ bool DStorageStreamBuf::open(std::wstring&& path)
     return true;
 }
 
-bool DStorageStreamBuf::open(std::string_view path)
-{
-    return open(ToWString(path));
-}
-
-bool DStorageStreamBuf::open(const std::wstring& path)
-{
-    return open(std::wstring(path));
-}
-
 void DStorageStreamBuf::close()
 {
     DS_PROFILE_SCOPE("DStorageStreamBuf::close()");
@@ -457,12 +447,12 @@ bool DStorageStreamBuf::is_open() const
     return m.state_.load() >= status_code::launched;
 }
 
-DStorageStreamBuf::status_code DStorageStreamBuf::state() const noexcept
+DStorageStreamBuf::status_code DStorageStreamBuf::state() const
 {
     return pimpl_->state_.load();
 }
 
-bool DStorageStreamBuf::is_complete() const noexcept
+bool DStorageStreamBuf::is_complete() const
 {
     return state() == status_code::completed;
 }
@@ -500,22 +490,22 @@ bool DStorageStreamBuf::wait_next_block()
     return false;
 }
 
-const char* DStorageStreamBuf::data() const noexcept
+const char* DStorageStreamBuf::data() const
 {
     return pimpl_->buf_.get();
 }
 
-size_t DStorageStreamBuf::file_size() const noexcept
+size_t DStorageStreamBuf::file_size() const
 {
     return pimpl_->file_size_;
 }
 
-size_t DStorageStreamBuf::read_size() const noexcept
+size_t DStorageStreamBuf::read_size() const
 {
     return pimpl_->read_size_;
 }
 
-BufferPtr&& DStorageStreamBuf::extract() noexcept
+BufferPtr&& DStorageStreamBuf::extract()
 {
     return std::move(pimpl_->buf_);
 }
@@ -540,16 +530,16 @@ DStorageStream& DStorageStream::operator=(DStorageStream&& v) noexcept
     return *this;
 }
 
-bool DStorageStream::open(std::string_view path)
+bool DStorageStream::open(std::string_view path, std::ios::openmode mode)
 {
-    return open(ToWString(path));
+    return open(ToWString(path), mode);
 }
-bool DStorageStream::open(const std::wstring& _path)
+bool DStorageStream::open(const std::wstring& _path, std::ios::openmode mode)
 {
     std::wstring path = _path;
-    return open(std::move(path));
+    return open(std::move(path), mode);
 }
-bool DStorageStream::open(std::wstring&& path)
+bool DStorageStream::open(std::wstring&& path, std::ios::openmode)
 {
     if (buf_.open(std::move(path))) {
         this->clear();
@@ -577,37 +567,37 @@ void DStorageStream::swap(DStorageStream& v) noexcept
     buf_.swap(v.buf_);
 }
 
-DStorageStreamBuf* DStorageStream::rdbuf() const noexcept
+DStorageStreamBuf* DStorageStream::rdbuf() const
 {
     return const_cast<DStorageStreamBuf*>(&buf_);
 }
 
-const char* DStorageStream::data() const noexcept
+const char* DStorageStream::data() const
 {
     return buf_.data();
 }
 
-size_t DStorageStream::file_size() const noexcept
+size_t DStorageStream::file_size() const
 {
     return buf_.file_size();
 }
 
-size_t DStorageStream::read_size() const noexcept
+size_t DStorageStream::read_size() const
 {
     return buf_.read_size();
 }
 
-BufferPtr&& DStorageStream::extract() noexcept
+BufferPtr&& DStorageStream::extract()
 {
     return std::move(buf_.extract());
 }
 
-DStorageStream::status_code DStorageStream::state() const noexcept
+DStorageStream::status_code DStorageStream::state() const
 {
     return buf_.state();
 }
 
-bool DStorageStream::is_complete() const noexcept
+bool DStorageStream::is_complete() const
 {
     return buf_.is_complete();
 }
