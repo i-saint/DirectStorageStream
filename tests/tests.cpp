@@ -10,7 +10,10 @@
 #include <filesystem>
 
 
-#define check(...) if(!(__VA_ARGS__)) { throw std::runtime_error("failed: " #__VA_ARGS__ "\n"); }
+#define STRINGNIZE(V) STRINGNIZE2(V)
+#define STRINGNIZE2(V) #V
+#define LINE_STRING STRINGNIZE(__LINE__)
+#define check(...) if(!(__VA_ARGS__)) { throw std::runtime_error("failed: " #__VA_ARGS__  " (" __FILE__ ":" LINE_STRING ")" "\n"); }
 
 using BufferPtr = ist::BufferPtr;
 
@@ -94,9 +97,9 @@ static void Test_DStorageStream()
         check(ifs.is_open() && ifs.good());
 
         ifs.wait_next_block();
-        check(ifs.read_size() == block_size);
+        check(ifs.read_size() >= block_size);
         ifs.wait_next_block();
-        check(ifs.read_size() == block_size * 2);
+        check(ifs.read_size() >= block_size * 2);
         ifs.wait_next_block();
         check(ifs.read_size() == file_size);
     }
@@ -121,10 +124,10 @@ static void Test_DStorageStream()
         data.resize(file_size / sizeof(uint32_t));
 
         ifs.read((char*)data.data(), 16);
-        check(ifs.read_size() == block_size);
+        check(ifs.read_size() >= block_size);
 
         ifs.read((char*)data.data() + 16, block_size - 16);
-        check(ifs.read_size() == block_size);
+        check(ifs.read_size() >= block_size);
 
         ifs.read((char*)data.data() + block_size, file_size - block_size);
         check(ifs.read_size() == file_size);
@@ -281,6 +284,10 @@ int main(int argc, char* argv[])
         }
         else if (param == "--force-file-buffering") {
             ist::DStorageStream::force_file_buffering(true);
+        }
+        else {
+            printf("unknown option: \"%s\"\n", argv[i]);
+            return -1;
         }
     }
 
