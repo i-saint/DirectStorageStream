@@ -16,13 +16,10 @@ struct MemoryMappedFile::PImpl
     void* data_ = nullptr;
     size_t size_ = 0;
     std::ios::openmode mode_ = 0;
+
+    void unmap();
 };
 
-
-MemoryMappedFile::MemoryMappedFile()
-{
-    pimpl_ = std::make_unique<PImpl>();
-}
 
 MemoryMappedFile::MemoryMappedFile(MemoryMappedFile&& v) noexcept
     : MemoryMappedFile()
@@ -30,17 +27,19 @@ MemoryMappedFile::MemoryMappedFile(MemoryMappedFile&& v) noexcept
     swap(v);
 }
 
+MemoryMappedFile& MemoryMappedFile::operator=(MemoryMappedFile&& v) noexcept
+{
+    swap(v);
+    return *this;
+}
+
+MemoryMappedFile::MemoryMappedFile()
+{
+}
+
 MemoryMappedFile::~MemoryMappedFile()
 {
     close();
-    pimpl_ = {};
-}
-
-MemoryMappedFile& MemoryMappedFile::operator=(MemoryMappedFile&& v) noexcept
-{
-    close();
-    swap(v);
-    return *this;
 }
 
 void MemoryMappedFile::swap(MemoryMappedFile& v)
@@ -50,27 +49,27 @@ void MemoryMappedFile::swap(MemoryMappedFile& v)
 
 bool MemoryMappedFile::is_open() const
 {
-    return pimpl_->file_;
+    return pimpl_ && pimpl_->file_;
 }
 
 void* MemoryMappedFile::data()
 {
-    return pimpl_->data_;
+    return pimpl_ ? pimpl_->data_ : nullptr;
 }
 
 const void* MemoryMappedFile::data() const
 {
-    return pimpl_->data_;
+    return pimpl_ ? pimpl_->data_ : nullptr;
 }
 
 size_t MemoryMappedFile::size() const
 {
-    return pimpl_->size_;
+    return pimpl_ ? pimpl_->size_ : 0;
 }
 
 std::ios::openmode MemoryMappedFile::mode() const
 {
-    return pimpl_->mode_;
+    return pimpl_ ? pimpl_->mode_ : 0;
 }
 
 bool MemoryMappedFile::open(const char* path, std::ios::openmode mode)
@@ -79,7 +78,9 @@ bool MemoryMappedFile::open(const char* path, std::ios::openmode mode)
 
     DS_PROFILE_SCOPE("MemoryMappedFile::open()");
 
+    pimpl_ = std::make_shared<PImpl>();
     auto& m = *pimpl_;
+
     m.mode_ = mode;
     if (mode & std::ios::out) {
         // open for write
@@ -129,10 +130,50 @@ bool MemoryMappedFile::open(const char* path, std::ios::openmode mode)
 
 void MemoryMappedFile::close()
 {
+    if (is_open()) {
+        auto& m = *pimpl_;
+        auto do_close = [pimpl_ = std::move(pimpl_)]() {
+            auto& m = *pimpl_;
+            m.unmap();
+            m.file_.reset();
+            m.mode_ = 0;
+            };
+
+        if (m.mode_ & async_unmap) {
+            concurrency::create_task(std::move(do_close));
+        }
+        else {
+            do_close();
+        }
+        pimpl_ = {};
+    }
+}
+
+void MemoryMappedFile::close_with_truncation(size_t filesize)
+{
     auto& m = *pimpl_;
-    unmap();
-    m.file_.reset();
-    m.mode_ = 0;
+    if (is_open() && m.mode_ & std::ios::out) {
+        auto do_close = [pimpl_ = std::move(pimpl_), filesize]() {
+            auto& m = *pimpl_;
+            m.unmap();
+
+            LARGE_INTEGER pos;
+            pos.QuadPart = filesize;
+            ::SetFilePointer(m.file_.get(), pos.LowPart, &pos.HighPart, FILE_BEGIN);
+            ::SetEndOfFile(m.file_.get());
+
+            m.file_.reset();
+            m.mode_ = 0;
+            };
+
+        if (m.mode_ & async_unmap) {
+            concurrency::create_task(std::move(do_close));
+        }
+        else {
+            do_close();
+        }
+        pimpl_ = {};
+    }
 }
 
 void* MemoryMappedFile::map(size_t capacity)
@@ -140,10 +181,10 @@ void* MemoryMappedFile::map(size_t capacity)
     if (!is_open()) {
         return nullptr;
     }
-    unmap();
 
     DS_PROFILE_SCOPE("MemoryMappedFile::map()");
     auto& m = *pimpl_;
+    m.unmap();
 
     LARGE_INTEGER size;
     size.QuadPart = capacity;
@@ -155,41 +196,15 @@ void* MemoryMappedFile::map(size_t capacity)
     return m.data_;
 }
 
-void MemoryMappedFile::unmap()
+void MemoryMappedFile::PImpl::unmap()
 {
     DS_PROFILE_SCOPE("MemoryMappedFile::unmap()");
 
-    auto& m = *pimpl_;
-    if (m.data_) {
-        auto do_unmap = [mapping = m.mapping_.release(), data = m.data_]() mutable {
-            DS_PROFILE_SCOPE("MemoryMappedFile::unmap(): do_unmap");
-            ::UnmapViewOfFile(data);
-            ::CloseHandle(mapping);
-            };
-
-        if (m.mode_ & async_unmap) {
-            concurrency::create_task(do_unmap);
-        }
-        else {
-            do_unmap();
-        }
-
-        m.data_ = nullptr;
-        m.size_ = 0;
-    }
-    m.mapping_.reset();
-}
-
-void MemoryMappedFile::truncate(size_t filesize)
-{
-    auto& m = *pimpl_;
-    if (is_open() && m.mode_ & std::ios::out) {
-        unmap();
-
-        LARGE_INTEGER pos;
-        pos.QuadPart = filesize;
-        ::SetFilePointer(m.file_.get(), pos.LowPart, &pos.HighPart, FILE_BEGIN);
-        ::SetEndOfFile(m.file_.get());
+    if (mapping_) {
+        ::UnmapViewOfFile(data_);
+        data_ = nullptr;
+        size_ = 0;
+        mapping_.reset();
     }
 }
 
@@ -202,10 +217,11 @@ bool MemoryMappedFile::prefetch(void* ptr, size_t size)
     ranges[0].NumberOfBytes = size;
     return ::PrefetchVirtualMemory(::GetCurrentProcess(), 1, ranges, 0);
 }
-bool MemoryMappedFile::prefetch(size_t position, size_t size)
+
+bool MemoryMappedFile::prefetch(size_t pos, size_t size)
 {
     auto& m = *pimpl_;
-    return prefetch((char*)m.data_ + position, size);
+    return prefetch((char*)m.data_ + pos, size);
 }
 #pragma endregion MemoryMappedFile
 
@@ -225,7 +241,7 @@ MMapStreamBuf::~MMapStreamBuf()
 {
     if (mmap_.is_open() && mmap_.mode() & std::ios::out) {
         size_t filesize = std::max(pmax_, size_t(this->pptr() - data()));
-        mmap_.truncate(filesize);
+        mmap_.close_with_truncation(filesize);
     }
 }
 

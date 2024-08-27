@@ -23,11 +23,10 @@ public:
 
     bool open(const char* path, std::ios::openmode mode);
     void close();
+    void close_with_truncation(size_t filesize);
 
     void* map(size_t size);
-    void unmap();
-    void truncate(size_t filesize);
-    bool prefetch(size_t position, size_t size);
+    bool prefetch(size_t pos, size_t size);
     static bool prefetch(void* ptr, size_t size);
 
     bool is_open() const;
@@ -38,7 +37,7 @@ public:
 
 private:
     struct PImpl;
-    std::unique_ptr<PImpl> pimpl_;
+    std::shared_ptr<PImpl> pimpl_;
 };
 
 
