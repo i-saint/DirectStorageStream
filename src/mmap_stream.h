@@ -7,6 +7,10 @@ namespace ist {
 class MemoryMappedFile
 {
 public:
+    static constexpr std::ios::openmode async_prefetch  = 0x1000;
+    static constexpr std::ios::openmode async_unmap     = 0x2000;
+
+public:
     // movable but non-copyable
     MemoryMappedFile(MemoryMappedFile&& v) noexcept;
     MemoryMappedFile& operator=(MemoryMappedFile&& v) noexcept;
@@ -24,6 +28,7 @@ public:
     void unmap();
     void truncate(size_t filesize);
     bool prefetch(size_t position, size_t size);
+    static bool prefetch(void* ptr, size_t size);
 
     bool is_open() const;
     void* data();
@@ -86,7 +91,11 @@ public:
 class MMapStream : public std::iostream
 {
     using super = std::iostream;
-    
+
+public:
+    static constexpr std::ios::openmode async_prefetch = MemoryMappedFile::async_prefetch;
+    static constexpr std::ios::openmode async_unmap = MemoryMappedFile::async_unmap;
+
 public:
     // movable but non-copyable
     MMapStream(MMapStream&& v) noexcept;

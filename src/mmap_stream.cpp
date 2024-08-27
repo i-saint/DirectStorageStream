@@ -2,6 +2,7 @@
 #include "internal.h"
 
 #include <windows.h>
+#include <ppltasks.h>
 
 
 namespace ist {
@@ -110,6 +111,12 @@ bool MemoryMappedFile::open(const char* path, std::ios::openmode mode)
                 m.size_ = size.QuadPart;
                 m.data_ = ::MapViewOfFile(m.mapping_.get(), FILE_MAP_READ, 0, 0, 0);
                 if (m.data_) {
+                    if (m.mode_ & async_prefetch) {
+                        concurrency::create_task([data = m.data_, size = m.size_]() {
+                            prefetch(data, size);
+                            });
+                    }
+
                     return true;
                 }
             }
@@ -154,7 +161,19 @@ void MemoryMappedFile::unmap()
 
     auto& m = *pimpl_;
     if (m.data_) {
-        ::UnmapViewOfFile(m.data_);
+        auto do_unmap = [mapping = m.mapping_.release(), data = m.data_]() mutable {
+            DS_PROFILE_SCOPE("MemoryMappedFile::unmap(): do_unmap");
+            ::UnmapViewOfFile(data);
+            ::CloseHandle(mapping);
+            };
+
+        if (m.mode_ & async_unmap) {
+            concurrency::create_task(do_unmap);
+        }
+        else {
+            do_unmap();
+        }
+
         m.data_ = nullptr;
         m.size_ = 0;
     }
@@ -174,16 +193,19 @@ void MemoryMappedFile::truncate(size_t filesize)
     }
 }
 
-bool MemoryMappedFile::prefetch(size_t position, size_t size)
+bool MemoryMappedFile::prefetch(void* ptr, size_t size)
 {
     DS_PROFILE_SCOPE("MemoryMappedFile::prefetch()");
 
-    auto& m = *pimpl_;
-
     WIN32_MEMORY_RANGE_ENTRY ranges[1];
-    ranges[0].VirtualAddress = (char*)m.data_ + position;
+    ranges[0].VirtualAddress = ptr;
     ranges[0].NumberOfBytes = size;
     return ::PrefetchVirtualMemory(::GetCurrentProcess(), 1, ranges, 0);
+}
+bool MemoryMappedFile::prefetch(size_t position, size_t size)
+{
+    auto& m = *pimpl_;
+    return prefetch((char*)m.data_ + position, size);
 }
 #pragma endregion MemoryMappedFile
 

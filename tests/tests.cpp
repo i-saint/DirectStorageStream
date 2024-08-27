@@ -179,7 +179,7 @@ static double CalcTotal(const char* path)
     }
     else if constexpr (std::is_same_v<T, ist::MMapStream>) {
         ist::MMapStream ifs;
-        if (ifs.open(path, std::ios::in)) {
+        if (ifs.open(path, std::ios::in | ist::MMapStream::async_prefetch | ist::MMapStream::async_unmap)) {
             std::span data{ (const float*)ifs.data(), ifs.size() / sizeof(float) };
             for (float v : data) {
                 total += v;
