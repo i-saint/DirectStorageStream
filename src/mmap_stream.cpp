@@ -1,9 +1,8 @@
 ﻿#include "mmap_stream.h"
 #include "internal.h"
 
-#include <functional>
-#include <cassert>
 #include <windows.h>
+
 
 namespace ist {
 
@@ -173,6 +172,18 @@ void MemoryMappedFile::truncate(size_t filesize)
         ::SetFilePointer(m.file_.get(), pos.LowPart, &pos.HighPart, FILE_BEGIN);
         ::SetEndOfFile(m.file_.get());
     }
+}
+
+bool MemoryMappedFile::prefetch(size_t position, size_t size)
+{
+    DS_PROFILE_SCOPE("MemoryMappedFile::prefetch()");
+
+    auto& m = *pimpl_;
+
+    WIN32_MEMORY_RANGE_ENTRY ranges[1];
+    ranges[0].VirtualAddress = (char*)m.data_ + position;
+    ranges[0].NumberOfBytes = size;
+    return ::PrefetchVirtualMemory(::GetCurrentProcess(), 1, ranges, 0);
 }
 #pragma endregion MemoryMappedFile
 
@@ -373,6 +384,11 @@ char* MMapStreamBuf::reserve(size_t size)
     return (char*)mmap_.data();
 }
 
+bool MMapStreamBuf::prefetch(size_t position, size_t size)
+{
+    return mmap_.prefetch(position, size);
+}
+
 char* MMapStreamBuf::data()
 {
     return (char*)mmap_.data();
@@ -388,7 +404,7 @@ size_t MMapStreamBuf::size() const
     return mmap_.size();
 }
 
-MemoryMappedFile& MMapStreamBuf::getFile()
+MemoryMappedFile& MMapStreamBuf::mmap_file()
 {
     return mmap_;
 }
@@ -470,6 +486,11 @@ char* MMapStream::reserve(size_t size)
     return buf_.reserve(size);
 }
 
+bool MMapStream::prefetch(size_t position, size_t size)
+{
+    return buf_.prefetch(position, size);
+}
+
 char* MMapStream::data()
 {
     return buf_.data();
@@ -487,7 +508,7 @@ size_t MMapStream::size() const
 
 MemoryMappedFile& MMapStream::get_memory_mapped_file()
 {
-    return buf_.getFile();
+    return buf_.mmap_file();
 }
 #pragma endregion MMapStream
 

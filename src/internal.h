@@ -75,6 +75,13 @@ public:
         value_ = v;
     }
 
+    HANDLE release()
+    {
+        HANDLE r = value_;
+        value_ = INVALID_HANDLE_VALUE;
+        return r;
+    }
+
     HANDLE get() const { return value_; }
 
     bool operator==(const ScopedHandle& v) const { return value_ == v.value_; }

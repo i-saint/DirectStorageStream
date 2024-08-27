@@ -23,6 +23,7 @@ public:
     void* map(size_t size);
     void unmap();
     void truncate(size_t filesize);
+    bool prefetch(size_t position, size_t size);
 
     bool is_open() const;
     void* data();
@@ -70,10 +71,11 @@ public:
     std::streamsize xsputn(const char* ptr, std::streamsize count) final override;
 
     char* reserve(size_t size);
+    bool prefetch(size_t position, size_t size);
     char* data();
     const char* data() const;
     size_t size() const;
-    MemoryMappedFile& getFile();
+    MemoryMappedFile& mmap_file();
 
 public:
     MemoryMappedFile mmap_;
@@ -105,6 +107,7 @@ public:
     bool is_open() const;
 
     char* reserve(size_t size);
+    bool prefetch(size_t position, size_t size);
     char* data();
     const char* data() const;
     size_t size() const;
