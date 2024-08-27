@@ -8,7 +8,7 @@
 #include <dstorage.h>
 #include <dxgi1_4.h>
 #include <winrt/base.h>
-#include <ppl.h>
+#include <ppltasks.h>
 
 
 namespace ist {
@@ -31,7 +31,6 @@ static com_ptr<ID3D12Device> g_d3d12_device;
 static com_ptr<IDStorageFactory> g_ds_factory;
 static com_ptr<IDStorageQueue> g_ds_queue;
 static uint32_t g_ds_staging_buffer_size = 1024 * 1024 * 64;
-static bool g_ds_async_free_buffer = true;
 static bool g_ds_debug = false;
 static std::mutex g_ds_mutex;
 
@@ -138,29 +137,8 @@ void DStorageStream::enable_debug(bool v)
     g_ds_debug = true;
 }
 
-void DStorageStream::enable_async_free_buffer(bool v)
-{
-    g_ds_async_free_buffer = v;
-}
 
-
-void BufferDeleter::operator()(void* ptr) const
-{
-    // huge buffer can take long time to free. so, do it asynchronously.
-    auto do_delete = [ptr]() {
-        DS_PROFILE_SCOPE("BufferDeleter::operator()");
-        ::VirtualFree(ptr, 0, MEM_RELEASE);
-        };
-
-    if (g_ds_async_free_buffer) {
-        concurrency::create_task(do_delete);
-    }
-    else {
-        do_delete();
-    }
-}
-
-BufferPtr CreateBuffer(size_t size)
+BufferPtr CreateBuffer(size_t size, bool async_free)
 {
     static const size_t page_size = []() {
         ::SYSTEM_INFO si;
@@ -170,10 +148,30 @@ BufferPtr CreateBuffer(size_t size)
 
     // align to page size
     size = (size + page_size - 1) & ~(page_size - 1);
-    return BufferPtr((char*)::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    char* ptr = (char*)::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (async_free) {
+        struct AsyncBufferDeleter
+        {
+            void operator()(void* p) const {
+                concurrency::create_task([p]() {
+                    DS_PROFILE_SCOPE("AsyncBufferDeleter");
+                    ::VirtualFree(p, 0, MEM_RELEASE);
+                    });
+            }
+        };
+        return BufferPtr(ptr, AsyncBufferDeleter());
+    }
+    else {
+        struct BufferDeleter
+        {
+            void operator()(void* p) const {
+                DS_PROFILE_SCOPE("BufferDeleter");
+                ::VirtualFree(p, 0, MEM_RELEASE);
+            }
+        };
+        return BufferPtr(ptr, BufferDeleter());
+    }
 }
-
-
 
 static std::wstring ToWString(std::string_view str)
 {
@@ -219,6 +217,7 @@ struct DStorageStreamBuf::PImpl
     uint64_t file_size_ = 0;
     uint64_t read_size_ = 0;
     uint32_t event_pos_ = 0;
+    std::ios::openmode mode_ = 0;
     AtomicStatusCode state_{ status_code::idle };
 };
 
@@ -403,7 +402,7 @@ long DStorageStreamBuf::do_read()
     return hr;
 }
 
-bool DStorageStreamBuf::open(std::wstring&& path)
+bool DStorageStreamBuf::open(std::wstring&& path, std::ios::openmode mode)
 {
     close();
 
@@ -420,6 +419,7 @@ bool DStorageStreamBuf::open(std::wstring&& path)
     // therefore, we use std::filesystem::file_size() instead. (which is reasonably fast)
 
     m.path_ = std::move(path);
+    m.mode_ = mode;
     {
         // get file size
         std::error_code ec;
@@ -434,7 +434,7 @@ bool DStorageStreamBuf::open(std::wstring&& path)
         }
 
         // allocate buffer
-        m.buf_ = CreateBuffer(m.file_size_);
+        m.buf_ = CreateBuffer(m.file_size_, m.mode_ & async_free);
         char* gp = m.buf_.get();
         this->setg(gp, gp, gp);
 
@@ -559,9 +559,9 @@ bool DStorageStream::open(const std::wstring& _path, std::ios::openmode mode)
     std::wstring path = _path;
     return open(std::move(path), mode);
 }
-bool DStorageStream::open(std::wstring&& path, std::ios::openmode)
+bool DStorageStream::open(std::wstring&& path, std::ios::openmode mode)
 {
-    if (buf_.open(std::move(path))) {
+    if (buf_.open(std::move(path), mode)) {
         this->clear();
         return true;
     }

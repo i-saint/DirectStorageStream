@@ -10,17 +10,29 @@ struct IDStorageQueue;
 
 namespace ist {
 
-struct BufferDeleter
-{
-    void operator()(void* p) const;
-};
-using BufferPtr = std::unique_ptr<char[], BufferDeleter>;
-BufferPtr CreateBuffer(size_t size);
+using BufferPtr = std::shared_ptr<char[]>;
+
+// huge buffer can take long time to free. async_free can take advantage in such case.
+BufferPtr CreateBuffer(size_t size, bool async_free = true);
 
 
 class DStorageStreamBuf : public std::streambuf
 {
     using super = std::streambuf;
+
+public:
+    static constexpr std::ios::openmode async_free = 0x2000;
+
+    enum class status_code {
+        idle,
+        launched,
+        reading,
+        completed,
+
+        error_dll_not_found = -10000,
+        error_file_open_failed,
+        error_unknown,
+    };
 
 public:
     // movable but non-copyable
@@ -39,7 +51,7 @@ public:
     int underflow() final override;
     using super::gptr;
 
-    bool open(std::wstring&& path);
+    bool open(std::wstring&& path, std::ios::openmode mode);
     void close();
     bool is_open() const;
 
@@ -50,16 +62,6 @@ public:
     BufferPtr&& extract();
 
     // state and wait methods. these are called internally on read(), so you do not need to care about usually.
-    enum class status_code {
-        idle,
-        launched,
-        reading,
-        completed,
-
-        error_dll_not_found = -10000,
-        error_file_open_failed,
-        error_unknown,
-    };
     status_code state() const;
     bool is_complete() const;
     bool wait();
@@ -96,9 +98,8 @@ public:
 
     static void enable_debug(bool v);
 
-    static void enable_async_free_buffer(bool v);
-
 public:
+    static constexpr std::ios::openmode async_free = DStorageStreamBuf::async_free;
     using status_code = DStorageStreamBuf::status_code;
 
     // movable but non-copyable
@@ -109,10 +110,10 @@ public:
 
     DStorageStream();
 
-    // mode is just for compatibility with std::fstream. it is just ignored and always behave as std::ios::in | std::ios::binary.
-    bool open(std::string_view path, std::ios::openmode mode = std::ios::in | std::ios::binary);
-    bool open(const std::wstring& path, std::ios::openmode mode = std::ios::in | std::ios::binary);
-    bool open(std::wstring&& path, std::ios::openmode mode = std::ios::in | std::ios::binary);
+    // mode: all except `async_free` flags are ignored. always behave as std::ios::in | std::ios::binary.
+    bool open(std::string_view path, std::ios::openmode mode = async_free);
+    bool open(const std::wstring& path, std::ios::openmode mode = async_free);
+    bool open(std::wstring&& path, std::ios::openmode mode = async_free);
     void close();
     bool is_open() const;
 
