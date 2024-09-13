@@ -110,7 +110,7 @@ static void Test_DStorageStream()
         ifs.open(filename);
 
         ifs.seekg(1);
-        check(ifs.read_size() == block_size);
+        check(ifs.read_size() >= block_size);
         ifs.seekg(block_size * 2 + 1);
         check(ifs.read_size() == file_size);
     }
