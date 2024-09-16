@@ -138,7 +138,7 @@ void DStorageStream::enable_debug(bool v)
 }
 
 
-BufferPtr CreateBuffer(size_t size, bool async_free)
+BufferPtr CreateBuffer(size_t size, bool async_free, bool prefetch)
 {
     static const size_t page_size = []() {
         ::SYSTEM_INFO si;
@@ -149,6 +149,20 @@ BufferPtr CreateBuffer(size_t size, bool async_free)
     // align to page size
     size = (size + page_size - 1) & ~(page_size - 1);
     char* ptr = (char*)::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
+    if (prefetch) {
+        concurrency::create_task([ptr, size]() {
+            DS_PROFILE_SCOPE("AsyncBufferPrefetch");
+            // VirtualAlloc() deferrs the actual allocation. actual allocation occurs when memory is accessed.
+            // ( https://randomascii.wordpress.com/2014/12/10/hidden-costs-of-memory-allocation/ )
+            // this PrefetchVirtualMemory() prompts the actual allocation.
+            WIN32_MEMORY_RANGE_ENTRY ranges[1];
+            ranges[0].VirtualAddress = ptr;
+            ranges[0].NumberOfBytes = size;
+            return ::PrefetchVirtualMemory(::GetCurrentProcess(), 1, ranges, 0);
+            });
+    }
+
     if (async_free) {
         struct AsyncBufferDeleter
         {

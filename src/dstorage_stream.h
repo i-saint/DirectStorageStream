@@ -13,7 +13,7 @@ namespace ist {
 using BufferPtr = std::shared_ptr<char[]>;
 
 // huge buffer can take long time to free. async_free can take advantage in such case.
-BufferPtr CreateBuffer(size_t size, bool async_free = true);
+BufferPtr CreateBuffer(size_t size, bool async_free = true, bool prefetch = true);
 
 
 class DStorageStreamBuf : public std::streambuf
